@@ -356,14 +356,16 @@ const play = (el, frames, opts) => el.animate(frames, { fill: "forwards", ...opt
 
 // 換場：「下一輪」裡的名字往上飛，取代場地裡原本的名字（只動有換人的場地）
 // stampCard：自己按「這場打完了」的那張卡片（先蓋章）；別人同步過來的沒有
-async function advanceWithFlight(stampCard) {
+// opts.force：一定要播動畫的球場（對調時比賽編號沒變，但人換了）
+// opts.sourceKey：那面球場的新名字，要從「下一場」裡哪一列飛上來
+async function advanceWithFlight(stampCard, opts = {}) {
   const ev = current();
   if (reduceMotion() || !ev) return renderEvent();
   state.animating = true;
   try {
     const shown = shownCourtKeys();
     const flow = courtFlow(ev);
-    const changed = flow.courts.map((x, k) => ((x ? x.key : "") !== shown[k] ? k : -1)).filter((k) => k >= 0);
+    const changed = flow.courts.map((x, k) => ((x ? x.key : "") !== shown[k] || opts.force?.includes(k) ? k : -1)).filter((k) => k >= 0);
     // 1. 剛打完的那場先蓋章
     if (stampCard) {
       stampCard.querySelector(".row")?.insertAdjacentHTML("beforeend", `<span class="done-badge just">已完成</span>`);
@@ -373,7 +375,7 @@ async function advanceWithFlight(stampCard) {
     // 2. 記下要上場的人在「下一輪」裡的位置
     const sources = [];
     for (const k of changed) {
-      const nk = flow.courts[k]?.key;
+      const nk = opts.sourceKey?.[k] || flow.courts[k]?.key;
       if (!nk) continue;
       document.querySelectorAll(`.next-card .mini-match[data-key="${nk}"] .pn`).forEach((el) => {
         const cs = getComputedStyle(el);
@@ -634,8 +636,52 @@ function scoreControls(ev, r, mi, m, courtNo) {
         ? ""
         : m.done
           ? `<button class="btn sm block" style="margin-top:10px" data-action="reopen" data-r="${r}" data-m="${mi}">改比分</button>`
-          : `<button class="btn primary block" style="margin-top:10px" data-action="finish" data-r="${r}" data-m="${mi}">這場打完了 ✓</button>`
+          : `<button class="btn primary block" style="margin-top:10px" data-action="finish" data-r="${r}" data-m="${mi}">這場打完了 ✓</button>${
+              courtNo && !m.sa && !m.sb
+                ? `<button class="btn sm block swap-btn" data-action="swap-next" data-r="${r}" data-m="${mi}">⇅ 與下一場對調<span class="small muted">（這場 4 人延後一場打）</span></button>`
+                : ""
+            }`
     }`;
+}
+
+// ---------- 與下一場對調 ----------
+// 整場 4 人一起延後：跟下一場（同一輪、人沒有在其他球場上）交換順序；
+// 兩場都有排到的人還是要接著打（人少時一定會有，例如 6 人 1 面球場），會提示是誰
+function swapSlots(rounds, ri, mi, rj, mj) {
+  const A = rounds[ri].matches[mi];
+  const B = rounds[rj].matches[mj];
+  rounds[ri].matches[mi] = { ...B, court: A.court };
+  rounds[rj].matches[mj] = { ...A, court: B.court };
+  if (ri !== rj) {
+    // 兩場在不同批：那兩批的休息名單也跟著換
+    const pa = [...A.a, ...A.b];
+    const pb = [...B.a, ...B.b];
+    const fix = (round, out, inn) => (round.rest = [...new Set([...(round.rest || []), ...out])].filter((id) => !inn.includes(id)));
+    fix(rounds[ri], pa, pb);
+    fix(rounds[rj], pb, pa);
+  }
+}
+
+function findSwap(ev, ri, mi) {
+  const flow = courtFlow(ev);
+  const k = flow.courts.findIndex((x) => x && x.ri === ri && x.mi === mi);
+  if (k < 0) return null;
+  const A = ev.rounds[ri].matches[mi];
+  const mine = new Set([...A.a, ...A.b]);
+  const cy = ev.rounds[ri].cycle || 0;
+  const busy = new Set(flow.courts.filter(Boolean).flatMap((x) => [...ev.rounds[x.ri].matches[x.mi].a, ...ev.rounds[x.ri].matches[x.mi].b]));
+  for (const p of flow.pending) {
+    if ((ev.rounds[p.ri].cycle || 0) !== cy) continue; // 不跨到下一輪
+    const B = ev.rounds[p.ri].matches[p.mi];
+    if ([...B.a, ...B.b].some((id) => busy.has(id) && !mine.has(id))) continue; // 有人還在別的球場上
+    // 試算：對調後，這面球場要真的變成打那一場，其他球場不受影響（各手機推算結果才會一致）
+    const trial = JSON.parse(JSON.stringify(ev.rounds));
+    swapSlots(trial, ri, mi, p.ri, p.mi);
+    const after = courtFlow({ rounds: trial }).courts.map((x) => (x ? x.key : ""));
+    const now = flow.courts.map((x) => (x ? x.key : ""));
+    if (after.every((key, j) => key === now[j])) return { k, rj: p.ri, mj: p.mi, oldKeyB: p.key, again: [...B.a, ...B.b].filter((id) => mine.has(id)) };
+  }
+  return null;
 }
 
 function liveHtml(ev) {
@@ -1118,6 +1164,23 @@ async function onAction(el) {
       saveEvents();
       if (navigator.vibrate) navigator.vibrate(8);
       renderEvent();
+      break;
+    }
+    case "swap-next": {
+      const ri = Number(el.dataset.r);
+      const mi = Number(el.dataset.m);
+      const s = findSwap(ev, ri, mi);
+      if (!s) {
+        const last = !courtFlow(ev).pending.some((p) => (ev.rounds[p.ri].cycle || 0) === (ev.rounds[ri].cycle || 0));
+        return toast(last ? "這是這一輪最後一場，沒有可以對調的場次" : "後面的場次都有人還在其他球場上，暫時不能對調，等其他球場打完再試", 3200);
+      }
+      swapSlots(ev.rounds, ri, mi, s.rj, s.mj);
+      saveEvents();
+      pushAll(ev);
+      // 換上來的那場：名字從「下一場」飛上來；延後的這場回到「下一場」清單
+      await advanceWithFlight(null, { force: [s.k], sourceKey: { [s.k]: s.oldKeyB } });
+      const nm = nameMap(ev);
+      toast(s.again.length ? `已對調。${s.again.map((id) => nm[id]).join("、")} 下一場也有，還是要接著打` : "已和下一場對調，這場延後打", 3200);
       break;
     }
     case "finish": {
