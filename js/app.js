@@ -304,6 +304,7 @@ function renderSetup() {
         ${d.mode === "doubles" ? "<li>盡量和<b>不同的組合</b>對打</li>" : ""}
         <li>休息時間平均，<b>不連續打三場以上</b>${c.maxStreak > 2 ? `<br><span class="small muted">（目前 ${c.active.length} 人、每次只有 ${c.rest} 人休息，有人會連打 ${c.maxStreak} 場）</span>` : c.rest === 0 ? `<br><span class="small muted">（目前人數剛好沒有人休息，每個人每場都會上）</span>` : ""}</li>
       </ul>
+      ${c.eachMin !== c.eachMax ? `<p class="rules-note">因數學關係，這一輪少打一場的人，下一輪會多打一場</p>` : ""}
     </div>`}
     <div style="height:14px"></div>
     <button class="btn primary block" data-action="create" ${tooFew ? "disabled" : ""} style="min-height:58px">開始排賽程 ${BALL}</button>`;
