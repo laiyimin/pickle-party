@@ -195,3 +195,22 @@ test("第三輪只要每對再搭一次：第二輪中途取消的，不會在�
   const added = third.slice(partial.length).flatMap((r) => r.matches).length;
   assert.ok(added <= 9, `第三輪排了 ${added} 場`);
 });
+
+test("下一輪：上一輪少打的人優先多打，6 人三輪後每人場數一樣", () => {
+  const cnt = (rounds) => {
+    const g = {};
+    for (const r of rounds) for (const m of r.matches) for (const id of [...m.a, ...m.b]) g[id] = (g[id] || 0) + 1;
+    return g;
+  };
+  for (let seed = 1; seed <= 4; seed++) {
+    const c1 = buildCycle({ players: mk(6), mode: "doubles", courts: 1, seed });
+    const g1 = cnt(c1);
+    const c2 = buildCycle({ players: mk(6), mode: "doubles", courts: 1, keep: c1, baseline: c1, seed: seed + 10 });
+    const g2 = cnt(c2);
+    // 第一輪打 6 場的人，第二輪不會再多打
+    for (const id of Object.keys(g1)) if (g1[id] === 6) assert.equal(g2[id] - g1[id], 5, `${id} 連兩輪都多打`);
+    assert.ok(Math.max(...Object.values(g2)) - Math.min(...Object.values(g2)) <= 1);
+    const c3 = buildCycle({ players: mk(6), mode: "doubles", courts: 1, keep: c2, baseline: c2, seed: seed + 20 });
+    assert.deepEqual(new Set(Object.values(cnt(c3))).size, 1, "三輪後每人場數應一樣");
+  }
+});

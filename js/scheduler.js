@@ -133,7 +133,7 @@ function planRound(available, s, matchCount, size, rnd) {
   // 讓「誰上場」和「怎麼分組」一起評估，避免同樣的對戰一直循環
   // 偶爾讓「多打一場」的人往前擠一點（有罰分），避免賽程卡進固定週期
   const order = (list, loose) => {
-    const key = Object.fromEntries(list.map((id) => [id, s.games[id] - (loose && rnd() < 0.35 ? 1 : 0)]));
+    const key = Object.fromEntries(list.map((id) => [id, s.games[id] + (s.prior ? (s.prior[id] || 0) * 0.001 : 0) - (loose && rnd() < 0.35 ? 1 : 0)]));
     // 已經連打到上限的人排到後面（這輪休息）
     const tired = (id) => (s.playStreak[id] >= maxPlay ? 1 : 0);
     return shuffle(list, rnd).sort(
@@ -250,7 +250,7 @@ export function buildSchedule({ players, mode, courts, rounds, games, keep = [],
  * @param {object[]} [opt.baseline]  這一輪開始「之前」的比賽：每一對只要比那時再多搭一次就算完成
  *   （第二輪 = 第一輪全部；重排這一輪剩下的場次 = 之前幾輪的）
  */
-export function buildCycle({ players, mode, courts, keep = [], baseline = [], seed = Date.now(), trials = 24 }) {
+export function buildCycle({ players, mode, courts, keep = [], baseline = [], seed = Date.now(), trials = baseline.length ? 80 : 24 }) {
   const size = mode === "singles" ? 2 : 4;
   const ids = players.map((p) => p.id);
   const fromRound = Object.fromEntries(players.map((p) => [p.id, p.fromRound || 0]));
@@ -258,12 +258,13 @@ export function buildCycle({ players, mode, courts, keep = [], baseline = [], se
   const rnd = mulberry32(seed);
   const pairs = [];
   for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) pairs.push(pairKey(ids[i], ids[j]));
-  // 每一對要搭檔到幾次：這一輪開始前的次數 + 1
-  const before = statsFromRounds(ids, baseline);
-  const need = Object.fromEntries(pairs.map((k) => [k, ((size === 4 ? before.partner : before.opponent)[k] || 0) + 1]));
+  // 搭檔（單打：對手）只算「這一輪」的：每一輪各自讓每一對都搭到一次
+  // baseline 是這一輪開始前的比賽，keep 裡在它之後的就是這一輪已經排好的
+  const thisCycle = statsFromRounds(ids, keep.slice(baseline.length));
+  const need = Object.fromEntries(pairs.map((k) => [k, 1]));
   const covered = (s) => {
     const table = size === 4 ? s.partner : s.opponent;
-    return pairs.filter((k) => (table[k] || 0) >= need[k]).length;
+    return pairs.filter((k) => (table[k] || 0) >= 1).length;
   };
   // 上限：理論場數的 3 倍，避免人數太少時排不完
   const perGame = size === 4 ? 2 : 1;
@@ -274,6 +275,11 @@ export function buildCycle({ players, mode, courts, keep = [], baseline = [], se
   for (let t = 0; t < trials; t++) {
     const s = cloneStats(base);
     s.need = need;
+    s.prior = base.games; // 之前輪次打了幾場：用來決定多出來的場次給誰
+    s.games = Object.fromEntries(ids.map((id) => [id, (thisCycle.games[id] || 0)]));
+    // 搭檔／對手換成「這一輪」的次數；之前輪次只留下「兩隊對戰組合」，避免和上一輪碰到同樣兩隊
+    s.partner = { ...thisCycle.partner };
+    s.opponent = { ...thisCycle.opponent };
     const out = [];
     let score = 0;
     let overRest = 0;
@@ -299,10 +305,11 @@ export function buildCycle({ players, mode, courts, keep = [], baseline = [], se
       games += matchCount;
       out.push(round);
     }
-    const counts = ids.map((id) => s.games[id] - (base.games[id] || 0));
-    score += 40 * (Math.max(...counts) - Math.min(...counts));
+    // 上場數平均看「累計」：上一輪少打的人，這一輪優先拿到多出來的場次
+    const counts = ids.map((id) => s.games[id] - (thisCycle.games[id] || 0) + (base.games[id] || 0));
+    score += 200 * (Math.max(...counts) - Math.min(...counts));
     score += overRest;
-    score += 60 * games; // 場數越少越好
+    score += 300 * games; // 場數越少越好（比累計平均更重要：一輪不多排場次）
     score += 500 * (pairs.length - covered(s)); // 沒湊齊的組合
     if (score < bestScore) {
       bestScore = score;

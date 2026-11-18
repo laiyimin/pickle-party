@@ -303,6 +303,7 @@ function renderSetup() {
       <ul>
         <li>每個人都和其他每個人${d.mode === "doubles" ? "<b>搭檔過一次</b>" : "<b>對打過一次</b>"}，打完就是一輪</li>
         ${d.mode === "doubles" ? "<li>盡量和<b>不同的組合</b>對打</li>" : ""}
+        ${c.eachMin !== c.eachMax ? "<li>這一輪少打一場的人，<b>下一輪會優先多打</b>，累計場數會拉平</li>" : ""}
         <li>休息時間平均，<b>不連續打三場以上</b>${c.maxStreak > 2 ? `<br><span class="small muted">（目前 ${c.active.length} 人、每次只有 ${c.rest} 人休息，有人會連打 ${c.maxStreak} 場）</span>` : c.rest === 0 ? `<br><span class="small muted">（目前人數剛好沒有人休息，每個人每場都會上）</span>` : ""}</li>
         ${c.late.length ? "<li>晚到的人從<b>第 3 場</b>開始排</li>" : ""}
       </ul>
@@ -1216,6 +1217,8 @@ async function onAction(el) {
       const nextName = cycleName(cycleCount(ev));
       const curName = cycleName(cycleCount(ev) - 1);
       if (left && !confirm(`${curName}還有 ${left} 場沒打，要直接開始${nextName}嗎？\n沒打的場次會取消（正在打的會繼續）。`)) return;
+      toast(`排${nextName}中…`);
+      await wait(40); // 先讓提示顯示出來；人多時排程要一兩秒
       startNextCycle(ev);
       saveEvents();
       pushAll(ev);
