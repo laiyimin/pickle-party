@@ -32,6 +32,12 @@ test("雲端資料來回轉換不會遺失內容", () => {
   assert.equal(back.players[0].left, undefined);
 });
 
+test("比賽編號（id）會一起存上雲端", () => {
+  const withId = { ...ev, rounds: [{ matches: [{ id: "m1", court: 1, a: ["a"], b: ["b"], sa: 3, sb: 1, done: false }], rest: [], absent: [], cycle: 0 }] };
+  const back = fromCloud(JSON.parse(JSON.stringify(toCloud(withId))));
+  assert.equal(back.rounds[0].matches[0].id, "m1");
+});
+
 test("Realtime Database 刪掉空陣列、把陣列存成物件時也能還原", () => {
   const stored = {
     meta: { title: "x", mode: "singles", courts: 2 },

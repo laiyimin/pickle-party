@@ -10,11 +10,17 @@
 //   只能看：#w={id}
 
 import { firebaseConfig } from "./firebase-config.js";
+import { sameMatch, mergeRemoteScores, locateMatch } from "./ops.js";
 
 const SDK = "https://www.gstatic.com/firebasejs/10.12.2";
 let ready = null;
 
 export const cloudEnabled = () => !!(firebaseConfig && firebaseConfig.databaseURL);
+
+// 這支手機的時鐘和伺服器差多少：「打完的時間」都換算成伺服器時間，
+// 各手機時鐘不準也不會把換場順序算錯
+let serverOffset = 0;
+export const serverNow = () => Date.now() + serverOffset;
 
 function init() {
   if (!ready) {
@@ -25,7 +31,9 @@ function init() {
         import(`${SDK}/firebase-auth.js`),
       ]);
       const app = initializeApp(firebaseConfig);
-      return { db, auth, database: db.getDatabase(app), authInst: auth.getAuth(app) };
+      const database = db.getDatabase(app);
+      db.onValue(db.ref(database, ".info/serverTimeOffset"), (s) => (serverOffset = Number(s.val()) || 0));
+      return { db, auth, database, authInst: auth.getAuth(app) };
     })();
     ready.catch(() => (ready = null)); // 離線載入失敗時，下次再試
   }
@@ -66,10 +74,11 @@ export function toCloud(ev) {
       left: !!p.left,
     })),
     rounds: ev.rounds.map((r) => ({
-      matches: r.matches.map((m) => ({ court: m.court, a: m.a, b: m.b, sa: m.sa || 0, sb: m.sb || 0, done: !!m.done, ...(m.doneAt != null ? { doneAt: m.doneAt } : {}) })),
+      matches: r.matches.map((m) => ({ ...(m.id ? { id: m.id } : {}), court: m.court, a: m.a, b: m.b, sa: m.sa || 0, sb: m.sb || 0, done: !!m.done, ...(m.doneAt != null ? { doneAt: m.doneAt } : {}), ...(m.addedAt != null ? { addedAt: m.addedAt } : {}) })),
       rest: r.rest || [],
       absent: r.absent || [],
       cycle: r.cycle || 0, // 第幾輪（0 起算）
+      ...(r.extra ? { extra: true } : {}), // 場邊的人加打的一場
     })),
   };
 }
@@ -95,10 +104,11 @@ export function fromCloud(data) {
       ...(p.left ? { left: true } : {}),
     })),
     rounds: arr(data.rounds).map((r) => ({
-      matches: arr(r.matches).map((m) => ({ court: m.court, a: arr(m.a), b: arr(m.b), sa: m.sa || 0, sb: m.sb || 0, done: !!m.done, ...(m.doneAt != null ? { doneAt: m.doneAt } : {}) })),
+      matches: arr(r.matches).map((m) => ({ ...(m.id ? { id: m.id } : {}), court: m.court, a: arr(m.a), b: arr(m.b), sa: m.sa || 0, sb: m.sb || 0, done: !!m.done, ...(m.doneAt != null ? { doneAt: m.doneAt } : {}), ...(m.addedAt != null ? { addedAt: m.addedAt } : {}) })),
       rest: arr(r.rest),
       absent: arr(r.absent),
       cycle: r.cycle || 0,
+      ...(r.extra ? { extra: true } : {}),
     })),
   };
 }
@@ -131,29 +141,50 @@ export async function fetchCloud(id) {
 async function withEditor(cloud, write) {
   const c = await signIn();
   try {
-    await write(c);
+    return await write(c);
   } catch (e) {
     if (!cloud.key || !/permission/i.test(String(e?.code || e?.message))) throw e;
     await joinCloud(cloud);
-    await write(c);
+    return await write(c);
   }
 }
 
-// 只更新單一場比賽，兩面場地同時記分不會互相覆蓋
-export function saveMatch(cloud, r, mi, m) {
-  return withEditor(cloud, (c) =>
-    c.db.update(c.db.ref(c.database, `events/${cloud.id}`), {
-      [`rounds/${r}/matches/${mi}/sa`]: m.sa || 0,
-      [`rounds/${r}/matches/${mi}/sb`]: m.sb || 0,
-      [`rounds/${r}/matches/${mi}/done`]: !!m.done,
-      [`rounds/${r}/matches/${mi}/doneAt`]: m.doneAt ?? null, // 打完的時間：各手機用它推算哪場上哪面場地
-      "meta/updatedAt": Date.now(),
-    })
-  );
+// 只更新單一場比賽，兩面場地同時記分不會互相覆蓋。
+// 先確認那個位置上還是同一場（別支手機可能剛重排、對調過）；不是的話照比賽編號找到它現在的位置再寫
+export function saveMatch(cloud, r, mi, m, cycle = null) {
+  const fields = { sa: m.sa || 0, sb: m.sb || 0, done: !!m.done, doneAt: m.doneAt ?? null }; // doneAt：各手機用它推算哪場上哪面場地
+  return withEditor(cloud, async (c) => {
+    const { ref, runTransaction, get, update } = c.db;
+    const res = await runTransaction(ref(c.database, `events/${cloud.id}/rounds/${r}/matches/${mi}`), (cur) => {
+      if (!cur || !sameMatch(cur, m)) return; // 放棄，下面照編號找
+      return { ...cur, ...fields };
+    });
+    if (!res.committed) {
+      const rounds = arr((await get(ref(c.database, `events/${cloud.id}/rounds`))).val()).map((x) => ({ matches: arr(x.matches), cycle: x.cycle || 0 }));
+      const at = locateMatch(rounds, m, r, mi, cycle);
+      if (!at) return; // 這場已經被重排掉了
+      await update(ref(c.database, `events/${cloud.id}/rounds/${at[0]}/matches/${at[1]}`), fields);
+    }
+    await update(ref(c.database, `events/${cloud.id}/meta`), { updatedAt: Date.now() });
+  });
 }
 
+// 整份寫回（重排、對調、下一輪）：雲端上別支手機剛記、本機還沒收到的比分先合併進來，不會被蓋掉。
+// 回傳寫進去的最新資料
 export function saveAll(cloud, ev) {
-  return withEditor(cloud, (c) => c.db.set(c.db.ref(c.database, `events/${cloud.id}`), toCloud(ev)));
+  return withEditor(cloud, async (c) => {
+    const res = await c.db.runTransaction(c.db.ref(c.database, `events/${cloud.id}`), (cur) => {
+      const remote = cur ? fromCloud(cur) : null;
+      return toCloud(remote ? { ...ev, rounds: mergeRemoteScores(ev.rounds, remote.rounds) } : ev);
+    });
+    return res.committed ? fromCloud(res.snapshot.val()) : null;
+  });
+}
+
+// 建立的人刪除球局：雲端的也刪掉，用連結打開的人也看不到了
+export async function deleteCloud(cloud) {
+  const c = await signIn();
+  await c.db.remove(c.db.ref(c.database, `events/${cloud.id}`));
 }
 
 export async function watchCloud(id, onData) {

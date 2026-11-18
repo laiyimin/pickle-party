@@ -6,6 +6,9 @@
 //
 // 這裡不另外存「哪場在哪面場地」，而是每次都從「每場打完的時間（doneAt）」重新推算一遍。
 // 這樣兩支手機各自計算，結果一定一樣，不會把同一場比賽分配到兩面場地。
+//
+// 加場（球場空著、場邊的人先加打一場）：比賽上有 addedAt（加的時間），
+// 在那個時間點之前當作不存在；到了那個時間點，不受「最多往後看一輪」限制，直接上空著的球場。
 
 const players = (q) => [...q.m.a, ...q.m.b];
 export const matchKey = (ri, mi) => `${ri}-${mi}`;
@@ -24,14 +27,16 @@ export function courtFlow(ev) {
 
   // 把空著的場地補滿：照賽程順序找人都有空的比賽；
   // 優先放回它原本排定的場地（下一輪的場 1 → 場地 1），那面場不空才放別的空場
-  const fillEmpty = () => {
+  const fillEmpty = (now) => {
     for (;;) {
       const empties = [];
       onCourt.forEach((q, k) => !q && empties.push(k));
       if (!empties.length) return;
       // 最多只往後看到「最早還沒打的那一輪」的下一輪，避免把太後面（例如晚到的人）的比賽拉上來
-      const horizon = pending.length ? pending[0].ri + 1 : 0;
-      const i = pending.findIndex((q) => q.ri <= horizon && players(q).every((p) => !busy.has(p)));
+      const first = pending.find((q) => q.m.addedAt == null);
+      const horizon = first ? first.ri + 1 : 0;
+      const can = (q) => (q.m.addedAt != null ? q.m.addedAt <= now : q.ri <= horizon);
+      const i = pending.findIndex((q) => can(q) && players(q).every((p) => !busy.has(p)));
       if (i < 0) return;
       const q = pending.splice(i, 1)[0];
       const pref = (q.m.court || q.mi + 1) - 1;
@@ -42,13 +47,21 @@ export function courtFlow(ev) {
     }
   };
 
-  fillEmpty();
+  fillEmpty(-Infinity);
 
-  // 依打完的時間順序重播；舊資料沒有 doneAt 的照賽程順序
+  // 依時間順序重播「打完」和「加場」；舊資料沒有 doneAt 的照賽程順序
   const finished = queue
     .filter((q) => isFinished(q.m))
-    .sort((a, b) => (a.m.doneAt ?? 0) - (b.m.doneAt ?? 0) || a.ri - b.ri || a.mi - b.mi);
-  for (const f of finished) {
+    .sort((a, b) => (a.m.doneAt ?? 0) - (b.m.doneAt ?? 0) || a.ri - b.ri || a.mi - b.mi)
+    .map((q) => ({ t: q.m.doneAt ?? 0, f: q }));
+  const added = queue.filter((q) => q.m.addedAt != null).map((q) => ({ t: q.m.addedAt, add: true }));
+  const events = [...finished, ...added].sort((a, b) => a.t - b.t || (a.add ? 1 : 0) - (b.add ? 1 : 0));
+  for (const e of events) {
+    if (e.add) {
+      fillEmpty(e.t);
+      continue;
+    }
+    const f = e.f;
     const k = onCourt.indexOf(f);
     if (k < 0) {
       // 沒排上場就被標成打完（例如在「賽程」分頁直接記分）：從待打名單拿掉就好
@@ -59,7 +72,7 @@ export function courtFlow(ev) {
     }
     players(f).forEach((p) => busy.delete(p));
     onCourt[k] = null;
-    fillEmpty();
+    fillEmpty(e.t);
   }
 
   const doneCount = queue.filter((q) => isFinished(q.m)).length;

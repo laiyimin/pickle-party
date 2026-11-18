@@ -40,7 +40,7 @@ test("接龍格式二：空白分隔、名字後帶到場時間", () => {
   assert.deepEqual(r.time, { start: "16:00", end: "18:00", minutes: 120 });
 });
 
-test("候補、+1、括號註記、重複名字", () => {
+test("候補、+1、括號註記、同名的人不會被刪掉", () => {
   const r = parseRoster(`週六場
 1. 小明+1
 2、阿華(晚到)
@@ -48,10 +48,25 @@ test("候補、+1、括號註記、重複名字", () => {
 候補：
 1. 大雄`);
   const names = r.players.map((p) => p.name);
-  assert.deepEqual(names, ["小明", "小明的朋友", "阿華", "大雄"]);
+  assert.deepEqual(names, ["小明", "小明+1", "阿華", "小明(2)", "大雄"]);
   assert.deepEqual(r.players[2].notes, ["晚到"]);
-  assert.equal(r.players[3].waitlist, true);
-  assert.equal(r.players[3].active, false);
+  assert.equal(r.players[3].dup, true); // 標「同名？」讓團主決定
+  assert.equal(r.players[0].dup, undefined);
+  assert.equal(r.players[4].waitlist, true);
+  assert.equal(r.players[4].active, false);
+});
+
+test("+2 帶兩個朋友", () => {
+  const r = parseRoster("1. 建國+2\n2. 雅婷");
+  assert.deepEqual(r.players.map((p) => p.name), ["建國", "建國+1", "建國+2", "雅婷"]);
+});
+
+test("接龍上寫的星期優先（和日曆算的不一樣時）", () => {
+  const now = new Date(2026, 10, 18); // 2026/11/18（三）；11/20 其實是週五
+  assert.equal(parseDate("時間：11/20（週四）1600-1800", now).weekday, "四");
+  assert.equal(parseDate("11/20 週四下午球敘", now).weekday, "四");
+  assert.equal(parseDate("11/20(日)", now).weekday, "日");
+  assert.equal(parseDate("11/20 一起打球", now).weekday, "五"); // 沒寫星期：用日曆算
 });
 
 test("日期解析與預設球局名稱", () => {

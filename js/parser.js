@@ -59,8 +59,9 @@ function parseTimeRange(text) {
 const WEEKDAYS = "日一二三四五六";
 
 // 抓接龍裡的日期（11/5、11/5（四））；年份取最接近今天的那一年
+// 接龍上有寫星期（11/5（週四））就以接龍為準，不用日曆算出來的
 export function parseDate(text, now = new Date()) {
-  const m = (text || "").match(/(?<![\d/])(\d{1,2})\s*\/\s*(\d{1,2})(?![\d/])/);
+  const m = (text || "").match(/(?<![\d/])(\d{1,2})\s*\/\s*(\d{1,2})(?![\d/])(?:(?:\s*[（(]\s*(?:週|周|星期|禮拜)?|\s*(?:週|周|星期|禮拜))\s*([一二三四五六日天]))?/);
   if (!m) return null;
   const month = Number(m[1]);
   const day = Number(m[2]);
@@ -71,7 +72,8 @@ export function parseDate(text, now = new Date()) {
   else if (diffMonths > 6) year--; // 1 月看到 12/28 → 去年
   const d = new Date(year, month - 1, day);
   if (d.getMonth() !== month - 1) return null; // 2/30 之類不存在的日期
-  return { year, month, day, weekday: WEEKDAYS[d.getDay()] };
+  const written = m[3] === "天" ? "日" : m[3];
+  return { year, month, day, weekday: written || WEEKDAYS[d.getDay()] };
 }
 
 // 預設球局名稱：「11/5（四）球敘」；沒有日期就用今天
@@ -119,14 +121,20 @@ export function parseRoster(text) {
     if (num === 1 && players.length && !waitlist) waitlist = true; // 第二段從 1 開始 → 通常是候補
     expected = num + 1;
 
-    const { name, arrive, notes, plus } = cleanName(m[2]);
-    if (!name) continue; // 空位
-    const key = name.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    players.push({ name, arrive, notes, waitlist, active: !waitlist });
+    const { name: raw, arrive, notes, plus } = cleanName(m[2]);
+    if (!raw) continue; // 空位
+    // 同名的人：不默默刪掉，第二個叫「小明(2)」並標「同名？」，讓團主自己決定改名或刪掉
+    let name = raw;
+    let dup = false;
+    for (let n = 2; seen.has(name.toLowerCase()); n++) {
+      name = `${raw}(${n})`;
+      dup = true;
+    }
+    seen.add(name.toLowerCase());
+    players.push({ name, arrive, notes, waitlist, active: !waitlist, ...(dup ? { dup: true } : {}) });
+    // 「+1」帶朋友：叫「小明+1」（短，球場卡片上不會被切斷）
     for (let i = 1; i <= plus; i++) {
-      const guest = `${name}的朋友${plus > 1 ? i : ""}`;
+      const guest = `${raw}+${i}`;
       if (!seen.has(guest.toLowerCase())) {
         seen.add(guest.toLowerCase());
         players.push({ name: guest, arrive, notes: [], waitlist, active: !waitlist });

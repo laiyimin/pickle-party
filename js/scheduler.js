@@ -250,7 +250,7 @@ export function buildSchedule({ players, mode, courts, rounds, games, keep = [],
  * @param {object[]} [opt.baseline]  這一輪開始「之前」的比賽：每一對只要比那時再多搭一次就算完成
  *   （第二輪 = 第一輪全部；重排這一輪剩下的場次 = 之前幾輪的）
  */
-export function buildCycle({ players, mode, courts, keep = [], baseline = [], seed = Date.now(), trials = baseline.length ? 80 : 24 }) {
+export function buildCycle({ players, mode, courts, keep = [], baseline = [], seed = Date.now(), trials }) {
   const size = mode === "singles" ? 2 : 4;
   const ids = players.map((p) => p.id);
   const fromRound = Object.fromEntries(players.map((p) => [p.id, p.fromRound || 0]));
@@ -258,6 +258,8 @@ export function buildCycle({ players, mode, courts, keep = [], baseline = [], se
   const rnd = mulberry32(seed);
   const pairs = [];
   for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) pairs.push(pairKey(ids[i], ids[j]));
+  // 人多時一輪的場數會變很多，每次試排都很久：試排次數跟著減少，手機上才不會等太久
+  if (!trials) trials = Math.max(8, Math.round((baseline.length ? 80 : 24) * Math.min(1, Math.sqrt(45 / Math.max(1, pairs.length)))));
   // 搭檔（單打：對手）只算「這一輪」的：每一輪各自讓每一對都搭到一次
   // baseline 是這一輪開始前的比賽，keep 裡在它之後的就是這一輪已經排好的
   const thisCycle = statsFromRounds(ids, keep.slice(baseline.length));
@@ -325,12 +327,15 @@ export function roundsFromTime(minutes, perGame) {
   return Math.max(1, Math.floor(minutes / perGame));
 }
 
+// 排名：勝率 → 每場平均淨勝分 → 每場平均得分 → 每場平均失分少
+// （大家場數一樣時，就等於「勝場 → 淨勝分 → 總得分 → 失分少」；場數不同時，多打一場的人不會因此佔便宜）
+// 成績完全一樣的人名次相同（rank 一樣）；還沒打的人排最後，rank 是 null
 export function standings(players, rounds) {
   const t = {};
   for (const p of players) t[p.id] = { id: p.id, name: p.name, played: 0, w: 0, l: 0, pf: 0, pa: 0 };
   for (const round of rounds) {
     for (const m of round.matches) {
-      if (!m.done) continue;
+      if (!m.done && m.doneAt == null) continue;
       const aWin = m.sa > m.sb;
       const tie = m.sa === m.sb;
       for (const id of m.a) {
@@ -351,7 +356,17 @@ export function standings(players, rounds) {
       }
     }
   }
-  return Object.values(t).sort(
-    (x, y) => y.w - x.w || y.pf - y.pa - (x.pf - x.pa) || y.pf - x.pf || x.pa - y.pa
-  );
+  const key = (r) => (r.played ? [r.w / r.played, (r.pf - r.pa) / r.played, r.pf / r.played, -r.pa / r.played] : null);
+  const rows = Object.values(t).map((r) => ({ ...r, key: key(r) }));
+  const cmp = (x, y) => {
+    if (!x.key || !y.key) return (x.key ? -1 : 0) - (y.key ? -1 : 0);
+    for (let i = 0; i < 4; i++) if (Math.abs(y.key[i] - x.key[i]) > 1e-9) return y.key[i] - x.key[i];
+    return 0;
+  };
+  rows.sort(cmp);
+  rows.forEach((r, i) => {
+    r.rank = !r.key ? null : i > 0 && rows[i - 1].key && cmp(rows[i - 1], r) === 0 ? rows[i - 1].rank : i + 1;
+  });
+  rows.forEach((r) => delete r.key);
+  return rows;
 }
