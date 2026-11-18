@@ -287,7 +287,6 @@ function renderSetup() {
         <label>同時開打的球場面數</label>
         <div class="stepper"><button data-action="step" data-k="courts" data-d="-1" aria-label="減少球場">−</button><output>${d.courts}</output><button data-action="step" data-k="courts" data-d="1" aria-label="增加球場">＋</button></div>
       </div>
-      ${c.perRound > 0 ? `<div class="per-person">${BALL}這一輪共 <strong>${c.games}</strong> 場・每人約打 <strong>${c.eachMin === c.eachMax ? c.eachMin : `${c.eachMin}–${c.eachMax}`}</strong> 場</div>` : ""}
     </div>
     ${
       tooFew
@@ -301,11 +300,9 @@ function renderSetup() {
     ${tooFew ? "" : `<div class="rules">
       <div class="rules-title">${BALL}排法規則</div>
       <ul>
-        <li>每個人都和其他每個人${d.mode === "doubles" ? "<b>搭檔過一次</b>" : "<b>對打過一次</b>"}，打完就是一輪</li>
+        <li>每一個人都和不同的人${d.mode === "doubles" ? "<b>搭檔一次</b>" : "<b>對打一次</b>"}</li>
         ${d.mode === "doubles" ? "<li>盡量和<b>不同的組合</b>對打</li>" : ""}
-        ${c.eachMin !== c.eachMax ? "<li>這一輪少打一場的人，<b>下一輪會優先多打</b>，累計場數會拉平</li>" : ""}
         <li>休息時間平均，<b>不連續打三場以上</b>${c.maxStreak > 2 ? `<br><span class="small muted">（目前 ${c.active.length} 人、每次只有 ${c.rest} 人休息，有人會連打 ${c.maxStreak} 場）</span>` : c.rest === 0 ? `<br><span class="small muted">（目前人數剛好沒有人休息，每個人每場都會上）</span>` : ""}</li>
-        ${c.late.length ? "<li>晚到的人從<b>第 3 場</b>開始排</li>" : ""}
       </ul>
     </div>`}
     <div style="height:14px"></div>
