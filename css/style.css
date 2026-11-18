@@ -372,11 +372,13 @@ td.name { text-align: left; font-weight: 700; font-size: 24px; }
 
 /* 輪數下面：每人約打幾場 */
 .per-person {
-  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
-  margin: -2px 0 6px; font-size: 17px; font-weight: 700;
+  display: block; text-align: center; line-height: 1.8;
+  margin: 4px 0 6px; padding: 6px 0; font-size: 16px; font-weight: 700; white-space: nowrap;
+  border-top: 2px dashed var(--line);
 }
+.per-person .doodle-ball { vertical-align: -4px; margin-right: 4px; }
 .per-person strong {
-  font-size: 22px; padding: 0 4px;
+  font-size: 20px; padding: 0 3px;
   background: linear-gradient(transparent 55%, var(--hl) 55%, var(--hl) 92%, transparent 92%);
 }
 .per-person .doodle-ball { width: 22px; height: 22px; }
@@ -453,3 +455,11 @@ td.name { text-align: left; font-weight: 700; font-size: 24px; }
 .court-label .small { font-weight: 400; }
 .round-list .ct b { color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .wait-box .doodle-ball { animation: none; } }
+
+/* 賽程分頁：第一輪 / 第二輪 分隔 */
+.cycle-head {
+  margin: 14px -16px 8px; padding: 6px 16px; font-weight: 700; font-size: 18px;
+  background: var(--hl); border-top: 2.5px solid var(--ink); border-bottom: 2.5px solid var(--ink);
+}
+.cycle-head:first-child { margin-top: -16px; border-top: 0; border-radius: 14px 6px 0 0; }
+.round-list .ct { min-width: 54px; line-height: 1.3; }

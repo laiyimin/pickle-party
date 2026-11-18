@@ -136,3 +136,62 @@ test("指定總場次：6 人雙打 1 面場排 9 場，每人上場 6 場", () 
   assert.equal(rounds.length, 9);
   assert.deepEqual(Object.values(games(rounds)), [6, 6, 6, 6, 6, 6]);
 });
+
+import { buildCycle } from "../js/scheduler.js";
+
+function partnerCounts(rounds) {
+  const c = {};
+  for (const r of rounds) for (const m of r.matches) for (const t of [m.a, m.b]) if (t.length === 2) { const k = [...t].sort().join("|"); c[k] = (c[k] || 0) + 1; }
+  return c;
+}
+
+test("一輪：6 人雙打 1 面場，每個人都和其他每個人搭檔過，8 場、最多連打 2 場", () => {
+  const rounds = buildCycle({ players: mk(6), mode: "doubles", courts: 1, seed: 1 });
+  check(rounds, 4);
+  assert.equal(Object.keys(partnerCounts(rounds)).length, 15); // C(6,2)
+  assert.equal(rounds.flatMap((r) => r.matches).length, 8);
+  const streak = {};
+  for (const r of rounds) {
+    const on = new Set(r.matches.flatMap((m) => [...m.a, ...m.b]));
+    for (const p of mk(6)) { streak[p.id] = on.has(p.id) ? (streak[p.id] || 0) + 1 : 0; assert.ok(streak[p.id] <= 2); }
+  }
+});
+
+test("一輪：8 人雙打 2 面場，28 組搭檔各一次、14 場", () => {
+  const rounds = buildCycle({ players: mk(8), mode: "doubles", courts: 2, seed: 2 });
+  const pc = partnerCounts(rounds);
+  assert.equal(Object.keys(pc).length, 28);
+  assert.equal(Math.max(...Object.values(pc)), 1);
+  assert.equal(rounds.flatMap((r) => r.matches).length, 14);
+});
+
+test("一輪：5 人單打，每兩人都對打過一次", () => {
+  const rounds = buildCycle({ players: mk(5), mode: "singles", courts: 1, seed: 3 });
+  const seen = new Set(rounds.flatMap((r) => r.matches.map((m) => [m.a[0], m.b[0]].sort().join("|"))));
+  assert.equal(seen.size, 10);
+});
+
+test("第二輪：接在第一輪後面，每對再搭檔一次", () => {
+  const first = buildCycle({ players: mk(6), mode: "doubles", courts: 1, seed: 4 });
+  const both = buildCycle({ players: mk(6), mode: "doubles", courts: 1, keep: first, baseline: first, seed: 5 });
+  assert.deepEqual(both.slice(0, first.length), first);
+  const pc = partnerCounts(both);
+  assert.equal(Object.keys(pc).length, 15);
+  assert.ok(Object.values(pc).every((n) => n >= 2));
+});
+
+test("晚到的人：前面的場次不會排到", () => {
+  const players = mk(6);
+  players[5].fromRound = 2;
+  const rounds = buildCycle({ players, mode: "doubles", courts: 1, seed: 6 });
+  for (const r of rounds.slice(0, 2)) for (const m of r.matches) assert.ok(![...m.a, ...m.b].includes("p5"));
+  assert.equal(Object.keys(partnerCounts(rounds)).length, 15);
+});
+
+test("第三輪只要每對再搭一次：第二輪中途取消的，不會在第三輪補打", () => {
+  const first = buildCycle({ players: mk(6), mode: "doubles", courts: 1, seed: 7 });
+  const partial = first.concat(buildCycle({ players: mk(6), mode: "doubles", courts: 1, keep: first, baseline: first, seed: 8 }).slice(first.length, first.length + 2));
+  const third = buildCycle({ players: mk(6), mode: "doubles", courts: 1, keep: partial, baseline: partial, seed: 9 });
+  const added = third.slice(partial.length).flatMap((r) => r.matches).length;
+  assert.ok(added <= 9, `第三輪排了 ${added} 場`);
+});

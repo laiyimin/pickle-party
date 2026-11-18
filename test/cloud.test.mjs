@@ -17,8 +17,8 @@ const ev = {
     { id: "c", name: "阿德", fromRound: 0, left: true },
   ],
   rounds: [
-    { matches: [{ court: 1, a: ["a", "c"], b: ["b", "d"], sa: 21, sb: 18, done: true }], rest: [], absent: ["b"] },
-    { matches: [{ court: 1, a: ["a", "b"], b: ["c", "d"], sa: 0, sb: 0, done: false }], rest: ["e"], absent: [] },
+    { matches: [{ court: 1, a: ["a", "c"], b: ["b", "d"], sa: 21, sb: 18, done: true }], rest: [], absent: ["b"], cycle: 0 },
+    { matches: [{ court: 1, a: ["a", "b"], b: ["c", "d"], sa: 0, sb: 0, done: false }], rest: ["e"], absent: [], cycle: 1 },
   ],
 };
 
@@ -40,7 +40,7 @@ test("Realtime Database 刪掉空陣列、把陣列存成物件時也能還原",
   };
   const back = fromCloud(stored);
   assert.deepEqual(back.players.map((p) => p.name), ["A", "B"]);
-  assert.deepEqual(back.rounds[0], { matches: [{ court: 1, a: ["a"], b: ["b"], sa: 3, sb: 0, done: false }], rest: [], absent: [] });
+  assert.deepEqual(back.rounds[0], { matches: [{ court: 1, a: ["a"], b: ["b"], sa: 3, sb: 0, done: false }], rest: [], absent: [], cycle: 0 });
 });
 
 test("分享連結解析", () => {

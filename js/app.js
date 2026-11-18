@@ -1,5 +1,5 @@
 import { parseRoster, defaultTitle } from "./parser.js";
-import { buildSchedule, roundsFromTime, standings } from "./scheduler.js";
+import { buildCycle, standings } from "./scheduler.js";
 import { BALL, RALLY, ARROW, SHARE } from "./doodles.js";
 import { courtFlow, waitingFor, benched, isFinished } from "./flow.js";
 import { cloudEnabled, createCloud, joinCloud, fetchCloud, saveMatch, saveAll, watchCloud, shareUrl, parseShareHash } from "./cloud.js";
@@ -145,19 +145,33 @@ function defaultCourts(n, mode) {
   return Math.max(1, Math.min(4, Math.floor(n / 5)));
 }
 
+// 晚到的人：從第 3 場開始排（球場多時至少跳過第一批）
+const lateFromRound = (perRound) => Math.max(1, Math.floor(2 / Math.max(1, perRound)));
+const isLate = (p) => !!p.arrive || (p.notes || []).some((n) => /晚到|遲到/.test(n));
+
 function draftCalc(d) {
   const active = d.players.filter((p) => p.active);
   const size = d.mode === "singles" ? 2 : 4;
   const perRound = Math.min(d.courts, Math.floor(active.length / size));
-  // 總場次：預設依時間推算（每段時間所有場地同時開打）；手動調整後就用使用者的數字
-  const autoGames = (roundsFromTime(d.minutes, d.perGame) || 8) * perRound;
-  const games = d.gamesTouched ? d.games : autoGames;
-  const rounds = perRound ? Math.ceil(games / perRound) : 0;
-  const each = active.length ? (games * size) / active.length : 0;
   const rest = active.length - perRound * size;
-  // 人太少時做不到「最多連打 2 場」：每人每 S+1 輪至少要休一次 → S = ⌈人數 / 休息名額⌉ − 1
+  // 人太少時做不到「不連打三場」：每人每 S+1 批至少要休一次 → S = ⌈人數 / 休息名額⌉ − 1
   const maxStreak = rest > 0 ? Math.max(2, Math.ceil(active.length / rest) - 1) : Infinity;
-  return { active, size, perRound, games, rounds, each, rest, maxStreak };
+  const late = active.filter(isLate);
+  const players = active.map((p) => ({ id: p.id, fromRound: isLate(p) ? lateFromRound(perRound) : 0 }));
+  // 實際排一次（同樣的設定只排一次），畫面上的場數和開始後的賽程一定一樣
+  let rounds = [];
+  if (perRound > 0) {
+    const key = JSON.stringify([d.mode, d.courts, players, d.seed]);
+    if (d.preview?.key !== key) d.preview = { key, rounds: buildCycle({ players, mode: d.mode, courts: d.courts, seed: d.seed }) };
+    rounds = d.preview.rounds;
+  }
+  const games = rounds.reduce((n, r) => n + r.matches.length, 0);
+  const count = {};
+  rounds.forEach((r) => r.matches.forEach((m) => [...m.a, ...m.b].forEach((id) => (count[id] = (count[id] || 0) + 1))));
+  const onTime = players.filter((p) => !p.fromRound).map((p) => count[p.id] || 0);
+  const eachMin = onTime.length ? Math.min(...onTime) : 0;
+  const eachMax = onTime.length ? Math.max(...onTime) : 0;
+  return { active, size, perRound, rest, maxStreak, late, players, rounds, games, eachMin, eachMax };
 }
 
 // ---------- 畫面 ----------
@@ -257,7 +271,6 @@ function renderSetup() {
   setTop("新球局", { back: true });
   const d = state.draft;
   const c = draftCalc(d);
-  const late = c.active.filter((p) => p.arrive);
   const tooFew = c.active.length < c.size;
   app.innerHTML = `
     <div class="steps"><span class="on"></span><span class="on"></span></div>
@@ -271,43 +284,27 @@ function renderSetup() {
         </div>
       </div>
       <div class="field">
-        <label>場地<span class="hint">同時開打的面數</span></label>
-        <div class="stepper"><button data-action="step" data-k="courts" data-d="-1" aria-label="減少場地">−</button><output>${d.courts}</output><button data-action="step" data-k="courts" data-d="1" aria-label="增加場地">＋</button></div>
+        <label>同時開打的球場面數</label>
+        <div class="stepper"><button data-action="step" data-k="courts" data-d="-1" aria-label="減少球場">−</button><output>${d.courts}</output><button data-action="step" data-k="courts" data-d="1" aria-label="增加球場">＋</button></div>
       </div>
-      <div class="field">
-        <label>開始時間</label>
-        <input type="time" id="startInput" value="${esc(d.start || "")}" style="max-width:170px" />
-      </div>
-      <div class="field">
-        <label>總時長<span class="hint">分鐘</span></label>
-        <div class="stepper"><button data-action="step" data-k="minutes" data-d="-15" aria-label="減少時長">−</button><output>${d.minutes}</output><button data-action="step" data-k="minutes" data-d="15" aria-label="增加時長">＋</button></div>
-      </div>
-      <div class="field">
-        <label>每局約幾分鐘</label>
-        <div class="stepper"><button data-action="step" data-k="perGame" data-d="-1" aria-label="減少">−</button><output>${d.perGame}</output><button data-action="step" data-k="perGame" data-d="1" aria-label="增加">＋</button></div>
-      </div>
-      <div class="field">
-        <label>總場次<span class="hint">${d.gamesTouched ? `已手動調整・約 ${c.rounds * d.perGame} 分鐘` : "依時間自動計算"}</span></label>
-        <div class="stepper"><button data-action="step" data-k="games" data-d="-1" aria-label="減少場次">−</button><output>${c.games}</output><button data-action="step" data-k="games" data-d="1" aria-label="增加場次">＋</button></div>
-      </div>
-      ${c.perRound > 0 ? `<div class="per-person">${BALL}每人約打 <strong>${Number.isInteger(c.each) ? c.each : c.each.toFixed(1)}</strong> 場</div>` : ""}
+      ${c.perRound > 0 ? `<div class="per-person">${BALL}這一輪共 <strong>${c.games}</strong> 場・每人約打 <strong>${c.eachMin === c.eachMax ? c.eachMin : `${c.eachMin}–${c.eachMax}`}</strong> 場</div>` : ""}
     </div>
     ${
       tooFew
         ? `<div class="banner">人數不夠：${d.mode === "doubles" ? "雙打至少 4 人" : "單打至少 2 人"}，目前 ${c.active.length} 人</div>`
         : `<div class="summary">
-            ${c.active.length} 人・${c.perRound} 面場同時開打${c.rest > 0 ? `、每次 ${c.rest} 人休息` : ""}<br>
-            共 ${c.games} 場，分 ${c.rounds} 輪進行
-            ${d.courts > c.perRound ? `<br><span class="small">（人數只夠開 ${c.perRound} 面場）</span>` : ""}
-            ${late.length ? `<br><span class="small">晚到：${late.map((p) => `${esc(p.name)} ${esc(p.arrive)}`).join("、")}，到場前不會排到</span>` : ""}
+            ${c.active.length} 人・${c.perRound} 面球場同時開打${c.rest > 0 ? `、每次 ${c.rest} 人休息` : ""}
+            ${d.courts > c.perRound ? `<br><span class="small">（人數只夠開 ${c.perRound} 面球場）</span>` : ""}
+            ${c.late.length ? `<br><span class="small">晚到：${c.late.map((p) => `${esc(p.name)}${p.arrive ? ` ${esc(p.arrive)}` : ""}`).join("、")}，從第 3 場開始排</span>` : ""}
           </div>`
     }
     ${tooFew ? "" : `<div class="rules">
       <div class="rules-title">${BALL}排法規則</div>
       <ul>
-        <li>在有限的時間內，盡量讓所有人<b>平均上場</b></li>
-        <li>盡量和<b>不同的人搭配</b>、和<b>不同的人對打</b></li>
-        <li>最多<b>連續出賽兩場</b>${c.maxStreak > 2 ? `<br><span class="small muted">（目前 ${c.active.length} 人、每次只有 ${c.rest} 人休息，有人會連打 ${c.maxStreak} 場）</span>` : c.rest === 0 ? `<br><span class="small muted">（目前人數剛好沒有人休息，每個人每輪都會上場）</span>` : ""}</li>
+        <li>每個人都和其他每個人${d.mode === "doubles" ? "<b>搭檔過一次</b>" : "<b>對打過一次</b>"}，打完就是一輪</li>
+        ${d.mode === "doubles" ? "<li>盡量和<b>不同的組合</b>對打</li>" : ""}
+        <li>休息時間平均，<b>不連續打三場以上</b>${c.maxStreak > 2 ? `<br><span class="small muted">（目前 ${c.active.length} 人、每次只有 ${c.rest} 人休息，有人會連打 ${c.maxStreak} 場）</span>` : c.rest === 0 ? `<br><span class="small muted">（目前人數剛好沒有人休息，每個人每場都會上）</span>` : ""}</li>
+        ${c.late.length ? "<li>晚到的人從<b>第 3 場</b>開始排</li>" : ""}
       </ul>
     </div>`}
     <div style="height:14px"></div>
@@ -338,7 +335,7 @@ function renderEvent() {
     const all = courtFlow(ev).allDone;
     const prev = lastAllDone.get(ev.id);
     lastAllDone.set(ev.id, all);
-    if (prev === false && all) playRoundEnter(-1, ev.rounds.length);
+    if (prev === false && all) showBanner(`<span class="big-emoji">🏆</span><b>${cycleName(cycleCount(ev) - 1)}打完了！</b>`);
   }
 }
 
@@ -449,6 +446,42 @@ async function advanceWithFlight(stampCard) {
   } finally {
     state.animating = false;
   }
+}
+
+// 「一輪」= 每個人都和每個人搭檔過一次；round.cycle 記錄是第幾輪（0 起算）
+const CN = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"];
+const cycleName = (i) => `第${CN[i] || i + 1}輪`;
+const cycleCount = (ev) => 1 + Math.max(0, ...ev.rounds.map((r) => r.cycle || 0));
+// 每場比賽在它那一輪裡是第幾場
+function matchNumbers(ev) {
+  const map = new Map();
+  const totals = {};
+  ev.rounds.forEach((r, ri) =>
+    r.matches.forEach((m, mi) => {
+      const cy = r.cycle || 0;
+      totals[cy] = (totals[cy] || 0) + 1;
+      map.set(`${ri}-${mi}`, { cycle: cy, n: totals[cy] });
+    })
+  );
+  return { map, totals };
+}
+
+// 畫面中間的提示泡泡
+function showBanner(html) {
+  let b = $("#roundBanner");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "roundBanner";
+    b.className = "round-banner";
+    b.setAttribute("role", "status");
+    document.body.appendChild(b);
+  }
+  b.innerHTML = html;
+  b.classList.remove("show");
+  void b.offsetWidth; // 重新觸發動畫
+  b.classList.add("show");
+  clearTimeout(b._t);
+  b._t = setTimeout(() => b.classList.remove("show"), 1700);
 }
 
 const nameList = (ids, names) => ids.map((id) => `<span class="nm">${esc(names[id] || "?")}</span>`).join("、");
@@ -593,7 +626,7 @@ function scoreControls(ev, r, mi, m, courtNo) {
   };
   return `
     <div class="row between">
-      <span class="court-label">${courtNo ? `第 ${courtNo} 場地 <span class="small">・第 ${r + 1} 輪</span>` : `第 ${r + 1} 輪・場地 ${m.court}`}</span>
+      <span class="court-label">${(() => { const num = matchNumbers(ev).map.get(`${r}-${mi}`)?.n; return courtNo ? `第 ${courtNo} 場地 <span class="small">・第 ${num} 場</span>` : `第 ${num} 場・場地 ${m.court}`; })()}</span>
       ${m.done ? `<span class="done-badge${state.justDone === `${r}-${mi}` ? " just" : ""}">已完成</span>` : ""}
     </div>
     <div class="match">${side("a")}<span class="vs">VS</span>${side("b")}</div>
@@ -611,11 +644,19 @@ function liveHtml(ev) {
   const names = nameMap(ev);
   if (flow.allDone) {
     const top = standings(ev.players, ev.rounds).slice(0, 3);
+    const cyc = cycleCount(ev);
     return `<div class="card empty">
       <div class="big">🏆</div>
-      <p><strong>全部打完了！</strong></p>
+      <p><strong>${cycleName(cyc - 1)}打完了！</strong>${cyc > 1 ? `<br><span class="small muted">排名是 ${cyc} 輪累計</span>` : ""}</p>
       <p>${top.map((t, i) => `${["🥇", "🥈", "🥉"][i]} ${esc(t.name)}`).join("　")}</p>
-      ${readonly() ? "" : `<button class="btn" data-action="copy-text">複製結果貼到 LINE</button>`}
+      ${
+        readonly()
+          ? ""
+          : `<div class="stack">
+              <button class="btn primary block" data-action="new-cycle">🔁 同一組人再來${cycleName(cyc)}</button>
+              <button class="btn block" data-action="copy-text">複製結果貼到 LINE</button>
+            </div>`
+      }
     </div>`;
   }
   const activeIds = ev.players.filter((p) => !p.left).map((p) => p.id);
@@ -641,7 +682,14 @@ function liveHtml(ev) {
   const bench = benched(ev, flow, activeIds);
   return `
     <div class="live-status">
-      <span>已完成 ${flow.doneCount} / ${flow.total} 場</span>
+      <span>${(() => {
+        // 目前在打的是第幾輪：看場上（或下一場）的比賽
+        const nums = matchNumbers(ev);
+        const at = flow.courts.find(Boolean) || flow.pending[0];
+        const cy = at ? ev.rounds[at.ri].cycle || 0 : 0;
+        const doneInCycle = ev.rounds.reduce((n, r) => n + ((r.cycle || 0) === cy ? r.matches.filter(isFinished).length : 0), 0);
+        return `${cycleCount(ev) > 1 ? `${cycleName(cy)}・` : ""}已完成 ${doneInCycle} / ${nums.totals[cy] || 0} 場`;
+      })()}</span>
       ${ev.cloud ? `<span>・🔗 即時同步中</span>${ev.cloud.key ? `<button class="copy-link" data-action="copy-edit-link">${SHARE}複製賽程連結</button>` : ""}` : ""}
     </div>
     <div class="courts">${flow.courts.map(courtCard).join("")}</div>
@@ -649,7 +697,7 @@ function liveHtml(ev) {
     ${
       upcoming.length
         ? `<div class="card next-card" style="margin-top:14px">
-            <h2>下一輪</h2>
+            <h2>下一場</h2>
             ${upcoming
               .map((u) => {
                 const m = ev.rounds[u.ri].matches[u.mi];
@@ -665,20 +713,27 @@ function liveHtml(ev) {
 function roundsHtml(ev) {
   const names = nameMap(ev);
   const flow = courtFlow(ev);
-  const playing = new Map(flow.courts.filter(Boolean).map((x, i) => [x.key, flow.courtOf.get(x.key)]));
+  const nums = matchNumbers(ev);
+  const multi = cycleCount(ev) > 1;
+  const playing = new Map(flow.courts.filter(Boolean).map((x) => [x.key, flow.courtOf.get(x.key)]));
   const curRounds = new Set(flow.courts.filter(Boolean).map((x) => x.ri));
+  let lastCycle = -1;
   return `<div class="card round-list">
     ${ev.rounds
-      .map(
-        (round, r) => `<div class="round ${curRounds.has(r) ? "current" : ""}">
-          <div class="row between"><strong>第 ${r + 1} 輪</strong>${curRounds.has(r) ? `<span class="done-badge">進行中</span>` : ""}</div>
+      .map((round, r) => {
+        const cy = round.cycle || 0;
+        const head = multi && cy !== lastCycle ? `<div class="cycle-head">${cycleName(cy)}</div>` : "";
+        lastCycle = cy;
+        return `${head}<div class="round ${curRounds.has(r) ? "current" : ""}">
           ${round.matches
             .map((m, mi) => {
+              const key = `${r}-${mi}`;
+              const num = nums.map.get(key).n;
               if (state.editing && state.editing.r === r && state.editing.m === mi)
                 return `<div style="margin:8px 0">${scoreControls(ev, r, mi, m, null)}
                   <button class="btn sm block" style="margin-top:6px" data-action="collapse">收合</button></div>`;
               return `<button class="mini-match" data-action="expand" data-r="${r}" data-m="${mi}">
-                <span class="ct">${playing.has(`${r}-${mi}`) ? `<b>場${playing.get(`${r}-${mi}`)}</b><br>打中` : `場${flow.courtOf.get(`${r}-${mi}`) || m.court}`}</span>
+                <span class="ct"><b>第 ${num} 場</b><br>${playing.has(key) ? `場${playing.get(key)}・打中` : `場${flow.courtOf.get(key) || m.court}`}</span>
                 <span class="t r">${teamNames(m.a, names)}</span>
                 <span class="s">${m.done || m.sa || m.sb ? `${m.sa} : ${m.sb}` : `<span class="muted">vs</span>`}</span>
                 <span class="t">${teamNames(m.b, names)}</span>
@@ -686,8 +741,8 @@ function roundsHtml(ev) {
             })
             .join("")}
           ${round.rest.length ? `<div class="rest-line">休息：${nameList(round.rest, names)}</div>` : ""}
-        </div>`
-      )
+        </div>`;
+      })
       .join("")}
   </div>`;
 }
@@ -715,7 +770,7 @@ function rankHtml(ev) {
       </tbody>
     </table>
   </div>
-  <p class="muted small">排名順序：勝場 → 淨勝分 → 總得分 → 失分少者優先</p>`;
+  <p class="muted small">${cycleCount(ev) > 1 ? `${cycleCount(ev)} 輪累計・` : ""}排名順序：勝場 → 淨勝分 → 總得分 → 失分少者優先</p>`;
 }
 
 // ---------- 底部選單 ----------
@@ -751,8 +806,9 @@ function eventMenu() {
       ? `<button class="menu-item" data-action="share-edit"><span class="ico">✏️</span><span>分享「記分」連結<br><span class="muted small">拿到的人可以一起改比分</span></span></button>
     <button class="menu-item" data-action="share-view"><span class="ico">👀</span><span>分享「觀看」連結<br><span class="muted small">貼到群組，大家即時看比分</span></span></button>`
       : `<button class="menu-item" data-action="share-link"><span class="ico">🔗</span>分享唯讀連結</button>`}
+    <button class="menu-item" data-action="new-cycle"><span class="ico">🔁</span><span>以同一組人重新啟動${cycleName(cycleCount(current()))}<br><span class="muted small">成績累計</span></span></button>
     <button class="menu-item" data-action="edit-players"><span class="ico">👥</span>有人加入/離開 → 重排剩下的賽程</button>
-    <button class="menu-item" data-action="reshuffle"><span class="ico">🔀</span>重新洗牌（未開打的輪次）</button>
+    <button class="menu-item" data-action="reshuffle"><span class="ico">🔀</span>重新洗牌（還沒打的場次）</button>
     <button class="menu-item danger" data-action="delete-event" style="color:var(--b)"><span class="ico">🗑</span>刪除這個球局</button>
     <button class="menu-item" data-action="close-sheet"><span class="ico">✕</span>關閉</button>`);
 }
@@ -761,10 +817,8 @@ function playersSheet() {
   const ev = current();
   const playing = ev.players.filter((p) => !p.left);
   const left = ev.players.filter((p) => p.left);
-  const started = keepRounds(ev).length;
-  const remain = Math.max(1, ev.rounds.length - started);
   openSheet(`<h3>調整球員</h3>
-    <p class="muted small" style="margin-top:0">已開打的 ${started} 輪會保留，之後的輪次依新名單重排。</p>
+    <p class="muted small" style="margin-top:0">已經開打的場次會保留，還沒打的依新名單重排（一樣排到每個人都搭檔過）。</p>
     <div class="chips" style="margin-bottom:12px">
       ${playing.map((p) => `<span class="chip"><span>${esc(p.name)}</span><button class="x" data-action="leave" data-id="${p.id}" aria-label="${esc(p.name)} 離開">×</button></span>`).join("")}
       ${left.map((p) => `<span class="chip off"><span>${esc(p.name)}</span><button class="x" data-action="rejoin" data-id="${p.id}" aria-label="${esc(p.name)} 回來">↺</button></span>`).join("")}
@@ -773,9 +827,6 @@ function playersSheet() {
       <input type="text" name="name" placeholder="新加入的人" autocomplete="off" />
       <button class="btn sm" type="submit">加入</button>
     </form>
-    <div class="field"><label>剩下要排幾輪</label>
-      <div class="stepper"><button data-action="remain" data-d="-1">−</button><output id="remainOut">${remain}</output><button data-action="remain" data-d="1">＋</button></div>
-    </div>
     <button class="btn primary block" data-action="apply-players" style="margin-top:12px">重排剩下的賽程</button>
     <button class="btn block" data-action="close-sheet" style="margin-top:8px">取消</button>`);
 }
@@ -790,25 +841,49 @@ function keepRounds(ev) {
   return ev.rounds.slice(0, last + 1);
 }
 
-function reschedule(ev, remain) {
+// 重排還沒打的場次：保留已開打的，依目前名單排到這一輪每個人都搭檔過為止
+function reschedule(ev) {
   const keep = keepRounds(ev);
+  const cy = keep.length ? keep[keep.length - 1].cycle || 0 : 0;
   const players = ev.players.filter((p) => !p.left).map((p) => ({ id: p.id, fromRound: Math.max(p.fromRound || 0, 0) }));
-  ev.rounds = buildSchedule({ players, mode: ev.mode, courts: ev.courts, rounds: remain, keep });
+  const baseline = keep.filter((r) => (r.cycle || 0) < cy); // 這一輪開始前的比賽
+  const all = buildCycle({ players, mode: ev.mode, courts: ev.courts, keep, baseline, seed: Date.now() });
+  ev.rounds = all.map((r, i) => (i < keep.length ? r : { ...r, cycle: cy }));
+}
+
+// 以同一組人開始下一輪：還沒打的取消，接在後面排新的一輪，成績累計
+function startNextCycle(ev) {
+  const flow = courtFlow(ev);
+  const pendingKeys = new Set(flow.pending.map((p) => p.key));
+  ev.rounds = ev.rounds
+    .map((r, ri) => ({ ...r, matches: r.matches.filter((m, mi) => !pendingKeys.has(`${ri}-${mi}`)) }))
+    .filter((r) => r.matches.length);
+  const next = cycleCount(ev);
+  const players = ev.players.filter((p) => !p.left).map((p) => ({ id: p.id, fromRound: 0 }));
+  const all = buildCycle({ players, mode: ev.mode, courts: ev.courts, keep: ev.rounds, baseline: ev.rounds, seed: Date.now() });
+  const keepLen = ev.rounds.length;
+  ev.rounds = all.map((r, i) => (i < keepLen ? r : { ...r, cycle: next }));
+  return next;
 }
 
 // ---------- 分享 ----------
 function scheduleText(ev) {
   const names = nameMap(ev);
-  const lines = [`🏓 ${ev.title}｜${ev.mode === "singles" ? "單打" : "雙打"}・${ev.courts} 面場`, ""];
+  const lines = [`🏓 ${ev.title}｜${ev.mode === "singles" ? "單打" : "雙打"}・${ev.courts} 面球場`, ""];
+  const nums = matchNumbers(ev);
+  const multi = cycleCount(ev) > 1;
+  let lastCycle = -1;
   ev.rounds.forEach((round, r) => {
-    lines.push(`【第 ${r + 1} 輪】`);
-    for (const m of round.matches) {
+    const cy = round.cycle || 0;
+    if (multi && cy !== lastCycle) lines.push(`＝＝ ${cycleName(cy)} ＝＝`);
+    lastCycle = cy;
+    round.matches.forEach((m, mi) => {
       const score = m.done ? `  ${m.sa}:${m.sb}` : "";
-      lines.push(`${ev.courts > 1 ? `場${m.court} ` : ""}${teamText(m.a, names)} vs ${teamText(m.b, names)}${score}`);
-    }
-    if (round.rest.length) lines.push(`休：${round.rest.map((id) => names[id]).join("、")}`);
-    lines.push("");
+      lines.push(`第${nums.map.get(`${r}-${mi}`).n}場 ${teamText(m.a, names)} vs ${teamText(m.b, names)}${score}`);
+    });
+    if (round.rest.length) lines.push(`　休：${round.rest.map((id) => names[id]).join("、")}`);
   });
+  lines.push("");
   const p = progress(ev);
   if (p.done) {
     lines.push("📊 目前排名");
@@ -893,7 +968,7 @@ async function decodeShare(code) {
 
 // ---------- 動作 ----------
 function newDraft() {
-  return { text: "", title: defaultTitle(null), time: null, players: [], mode: "doubles", courts: 1, minutes: 120, perGame: 15, start: "", games: 0, gamesTouched: false };
+  return { text: "", title: defaultTitle(null), players: [], mode: "doubles", courts: 1, seed: Math.floor(Math.random() * 1e9) };
 }
 
 function applyParse(text) {
@@ -909,11 +984,6 @@ function applyParse(text) {
   });
   for (const m of manual) if (!d.players.some((p) => p.name === m.name)) d.players.push(m);
   if (!d.titleTouched) d.title = defaultTitle(r.date);
-  d.time = r.time;
-  if (r.time) {
-    d.minutes = r.time.minutes;
-    d.start = r.time.start;
-  }
 }
 
 function refreshParsed() {
@@ -929,13 +999,12 @@ function refreshParsed() {
 function createEvent() {
   const d = state.draft;
   const c = draftCalc(d);
-  const start = toMin(d.start);
-  const players = c.active.map((p) => {
-    let fromRound = 0;
-    const arr = toMin(p.arrive);
-    if (start != null && arr != null && arr > start) fromRound = Math.ceil((arr - start) / d.perGame);
-    return { id: p.id, name: p.name, arrive: p.arrive || null, fromRound };
-  });
+  const players = c.active.map((p) => ({
+    id: p.id,
+    name: p.name,
+    arrive: p.arrive || null,
+    fromRound: c.players.find((x) => x.id === p.id)?.fromRound || 0,
+  }));
   const now = new Date();
   const ev = {
     id: uid(),
@@ -944,10 +1013,8 @@ function createEvent() {
     createdAt: Date.now(),
     mode: d.mode,
     courts: d.courts,
-    perGame: d.perGame,
-    start: d.start,
     players,
-    rounds: buildSchedule({ players, mode: d.mode, courts: d.courts, rounds: c.rounds, games: c.games }),
+    rounds: c.rounds.map((r) => ({ ...r, cycle: 0 })),
   };
   state.events.push(ev);
   saveEvents();
@@ -971,7 +1038,6 @@ function createEvent() {
   window.scrollTo(0, 0);
 }
 
-let remainCount = 0;
 
 async function onAction(el) {
   const a = el.dataset.action;
@@ -1015,29 +1081,20 @@ async function onAction(el) {
       break;
     }
     case "to-setup":
-      if (!d.gamesTouched) d.courts = defaultCourts(d.players.filter((p) => p.active).length, d.mode);
-      d.perGame = d.mode === "singles" ? 12 : 15;
+      d.courts = defaultCourts(d.players.filter((p) => p.active).length, d.mode);
       state.view = "setup";
       render();
       window.scrollTo(0, 0);
       break;
     case "mode":
       d.mode = el.dataset.v;
-      d.perGame = d.mode === "singles" ? 12 : 15;
       d.courts = defaultCourts(d.players.filter((p) => p.active).length, d.mode);
       renderSetup();
       break;
     case "step": {
       const k = el.dataset.k;
       const delta = Number(el.dataset.d);
-      if (k === "games") {
-        d.games = Math.max(1, Math.min(200, draftCalc(d).games + delta));
-        d.gamesTouched = true;
-      } else {
-        const lim = { courts: [1, 8], minutes: [15, 480], perGame: [5, 40] }[k];
-        d[k] = Math.max(lim[0], Math.min(lim[1], d[k] + delta));
-        if (k !== "courts") d.gamesTouched = false; // 改時間就重新依時間計算
-      }
+      if (k === "courts") d.courts = Math.max(1, Math.min(8, d.courts + delta));
       renderSetup();
       break;
     }
@@ -1141,7 +1198,7 @@ async function onAction(el) {
     }
     case "import-shared": {
       closeSheet();
-      const copyEv = { ...state.shared, id: uid(), createdAt: Date.now(), perGame: 15, players: state.shared.players.map((p) => ({ ...p, fromRound: 0 })) };
+      const copyEv = { ...state.shared, id: uid(), createdAt: Date.now(), players: state.shared.players.map((p) => ({ ...p, fromRound: 0 })) };
       state.events.push(copyEv);
       saveEvents();
       state.shared = null;
@@ -1151,8 +1208,23 @@ async function onAction(el) {
       render();
       break;
     }
+    case "new-cycle": {
+      closeSheet();
+      const size = ev.mode === "singles" ? 2 : 4;
+      if (ev.players.filter((p) => !p.left).length < size) return toast("人數不夠排賽程");
+      const left = courtFlow(ev).pending.length;
+      const nextName = cycleName(cycleCount(ev));
+      const curName = cycleName(cycleCount(ev) - 1);
+      if (left && !confirm(`${curName}還有 ${left} 場沒打，要直接開始${nextName}嗎？\n沒打的場次會取消（正在打的會繼續）。`)) return;
+      startNextCycle(ev);
+      saveEvents();
+      pushAll(ev);
+      state.tab = "live";
+      renderEvent();
+      showBanner(`${BALL}<b>${nextName}開始！</b><span>成績會累計</span>`);
+      break;
+    }
     case "edit-players":
-      remainCount = Math.max(1, ev.rounds.length - keepRounds(ev).length);
       ev._backup = JSON.stringify(ev.players);
       playersSheet();
       break;
@@ -1160,17 +1232,12 @@ async function onAction(el) {
     case "rejoin":
       ev.players.find((p) => p.id === el.dataset.id).left = a === "leave";
       playersSheet();
-      $("#remainOut").textContent = remainCount;
-      break;
-    case "remain":
-      remainCount = Math.max(1, Math.min(60, remainCount + Number(el.dataset.d)));
-      $("#remainOut").textContent = remainCount;
       break;
     case "apply-players": {
       const size = ev.mode === "singles" ? 2 : 4;
       if (ev.players.filter((p) => !p.left).length < size) return toast("人數不夠排賽程");
       ev.players.forEach((p) => delete p.isNew);
-      reschedule(ev, remainCount);
+      reschedule(ev);
       delete ev._backup;
       saveEvents();
       pushAll(ev);
@@ -1181,9 +1248,8 @@ async function onAction(el) {
     }
     case "reshuffle": {
       closeSheet();
-      const remain = ev.rounds.length - keepRounds(ev).length;
-      if (remain <= 0) return toast("沒有未開打的輪次");
-      reschedule(ev, remain);
+      if (ev.rounds.length - keepRounds(ev).length <= 0) return toast("沒有還沒打的場次");
+      reschedule(ev);
       saveEvents();
       pushAll(ev);
       toast("已重新洗牌");
@@ -1247,8 +1313,6 @@ document.addEventListener("input", (e) => {
   } else if (e.target.id === "titleInput") {
     d.title = e.target.value;
     d.titleTouched = true;
-  } else if (e.target.id === "startInput") {
-    d.start = e.target.value;
   }
 });
 
@@ -1298,7 +1362,6 @@ document.addEventListener("submit", (e) => {
     if (existing) existing.left = false;
     else ev.players.push({ id: uid(), name, fromRound: 0, isNew: true });
     playersSheet();
-    $("#remainOut").textContent = remainCount;
   }
 });
 

@@ -22,9 +22,11 @@ function mulberry32(seed) {
 }
 
 const pairKey = (a, b) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+// 兩隊對戰的組合（不分左右）
+const matchupKey = (a, b) => [[...a].sort().join("+"), [...b].sort().join("+")].sort().join(" vs ");
 
 function emptyStats(ids) {
-  const s = { games: {}, restStreak: {}, playStreak: {}, lastPlayed: {}, partner: {}, opponent: {} };
+  const s = { games: {}, restStreak: {}, playStreak: {}, lastPlayed: {}, partner: {}, opponent: {}, matchup: {} };
   for (const id of ids) {
     s.games[id] = 0;
     s.restStreak[id] = 0;
@@ -42,6 +44,7 @@ function cloneStats(s) {
     lastPlayed: { ...s.lastPlayed },
     partner: { ...s.partner },
     opponent: { ...s.opponent },
+    matchup: { ...s.matchup },
   };
 }
 
@@ -63,6 +66,8 @@ function applyRound(s, round, r, ids) {
     if (m.a.length === 2) s.partner[pairKey(m.a[0], m.a[1])] = (s.partner[pairKey(m.a[0], m.a[1])] || 0) + 1;
     if (m.b.length === 2) s.partner[pairKey(m.b[0], m.b[1])] = (s.partner[pairKey(m.b[0], m.b[1])] || 0) + 1;
     for (const x of m.a) for (const y of m.b) s.opponent[pairKey(x, y)] = (s.opponent[pairKey(x, y)] || 0) + 1;
+    const mk = matchupKey(m.a, m.b);
+    s.matchup[mk] = (s.matchup[mk] || 0) + 1;
   }
   for (const id of ids) {
     if (!(id in s.games)) {
@@ -74,6 +79,7 @@ function applyRound(s, round, r, ids) {
   }
 }
 
+// s.need：這一輪每一對要搭檔（單打：對打）到幾次才算數；沒有就不給獎勵
 function arrangementCost(groups, s, size) {
   let cost = 0;
   const oppW = size === 2 ? 40 : 3; // 單打只有對手一個變數，重複對戰要罰重一點
@@ -81,10 +87,19 @@ function arrangementCost(groups, s, size) {
     const a = g.slice(0, size / 2);
     const b = g.slice(size / 2);
     if (size === 4) {
-      cost += 20 * (s.partner[pairKey(a[0], a[1])] || 0) ** 2;
-      cost += 20 * (s.partner[pairKey(b[0], b[1])] || 0) ** 2;
+      for (const t of [a, b]) {
+        const n = s.partner[pairKey(t[0], t[1])] || 0;
+        cost += 20 * n ** 2;
+        if (s.need && n < (s.need[pairKey(t[0], t[1])] || 1)) cost -= 45; // 這一輪還沒搭過 → 優先湊
+      }
+      cost += 30 * (s.matchup[matchupKey(a, b)] || 0) ** 2; // 同樣兩隊再碰頭
     }
-    for (const x of a) for (const y of b) cost += oppW * (s.opponent[pairKey(x, y)] || 0) ** 2;
+    for (const x of a)
+      for (const y of b) {
+        const n = s.opponent[pairKey(x, y)] || 0;
+        cost += oppW * n ** 2;
+        if (s.need && size === 2 && n < (s.need[pairKey(x, y)] || 1)) cost -= 60; // 單打：還沒對打過 → 優先
+      }
   }
   return cost;
 }
@@ -219,6 +234,79 @@ export function buildSchedule({ players, mode, courts, rounds, games, keep = [],
     if (score < bestScore) {
       bestScore = score;
       best = out;
+    }
+  }
+  return [...keep, ...(best || [])];
+}
+
+/**
+ * 排「一輪」：排到每個人都和其他每個人搭檔過（單打：對打過）為止。
+ * 對手組合盡量不重複；休息平均、不連打三場以上的規則和 buildSchedule 一樣。
+ * @param {object} opt
+ * @param {{id:string, fromRound?:number}[]} opt.players
+ * @param {"doubles"|"singles"} opt.mode
+ * @param {number} opt.courts
+ * @param {object[]} [opt.keep]  已經排好、要保留在前面的比賽
+ * @param {object[]} [opt.baseline]  這一輪開始「之前」的比賽：每一對只要比那時再多搭一次就算完成
+ *   （第二輪 = 第一輪全部；重排這一輪剩下的場次 = 之前幾輪的）
+ */
+export function buildCycle({ players, mode, courts, keep = [], baseline = [], seed = Date.now(), trials = 24 }) {
+  const size = mode === "singles" ? 2 : 4;
+  const ids = players.map((p) => p.id);
+  const fromRound = Object.fromEntries(players.map((p) => [p.id, p.fromRound || 0]));
+  const base = statsFromRounds(ids, keep);
+  const rnd = mulberry32(seed);
+  const pairs = [];
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) pairs.push(pairKey(ids[i], ids[j]));
+  // 每一對要搭檔到幾次：這一輪開始前的次數 + 1
+  const before = statsFromRounds(ids, baseline);
+  const need = Object.fromEntries(pairs.map((k) => [k, ((size === 4 ? before.partner : before.opponent)[k] || 0) + 1]));
+  const covered = (s) => {
+    const table = size === 4 ? s.partner : s.opponent;
+    return pairs.filter((k) => (table[k] || 0) >= need[k]).length;
+  };
+  // 上限：理論場數的 3 倍，避免人數太少時排不完
+  const perGame = size === 4 ? 2 : 1;
+  const maxRounds = Math.ceil(pairs.length / perGame / Math.max(1, Math.min(courts, Math.floor(ids.length / size)))) * 3 + 4;
+
+  let best = null;
+  let bestScore = Infinity;
+  for (let t = 0; t < trials; t++) {
+    const s = cloneStats(base);
+    s.need = need;
+    const out = [];
+    let score = 0;
+    let overRest = 0;
+    let games = 0;
+    for (let r = keep.length; r < keep.length + maxRounds && covered(s) < pairs.length; r++) {
+      const available = ids.filter((id) => fromRound[id] <= r);
+      const matchCount = Math.min(courts, Math.floor(available.length / size));
+      if (matchCount <= 0) {
+        out.push({ matches: [], rest: available, absent: ids.filter((id) => fromRound[id] > r) });
+        continue;
+      }
+      const plan = planRound(available, s, matchCount, size, rnd);
+      const round = { matches: plan.matches, rest: plan.rest, absent: ids.filter((id) => fromRound[id] > r) };
+      applyRound(s, round, r, available);
+      const ideal = idealRest(available.length, matchCount * size);
+      const maxPlay = idealPlayStreak(available.length, matchCount * size);
+      for (const id of available) if (s.playStreak[id] > maxPlay) overRest += HARD_PLAY;
+      for (const id of plan.rest) {
+        if (s.restStreak[id] > ideal) overRest += SOFT_REST;
+        if (s.restStreak[id] > ideal + 1) overRest += HARD_REST;
+      }
+      score += plan.cost;
+      games += matchCount;
+      out.push(round);
+    }
+    const counts = ids.map((id) => s.games[id] - (base.games[id] || 0));
+    score += 40 * (Math.max(...counts) - Math.min(...counts));
+    score += overRest;
+    score += 60 * games; // 場數越少越好
+    score += 500 * (pairs.length - covered(s)); // 沒湊齊的組合
+    if (score < bestScore) {
+      bestScore = score;
+      best = out.filter((r) => r.matches.length);
     }
   }
   return [...keep, ...(best || [])];

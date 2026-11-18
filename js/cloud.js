@@ -69,6 +69,7 @@ export function toCloud(ev) {
       matches: r.matches.map((m) => ({ court: m.court, a: m.a, b: m.b, sa: m.sa || 0, sb: m.sb || 0, done: !!m.done, ...(m.doneAt != null ? { doneAt: m.doneAt } : {}) })),
       rest: r.rest || [],
       absent: r.absent || [],
+      cycle: r.cycle || 0, // 第幾輪（0 起算）
     })),
   };
 }
@@ -97,6 +98,7 @@ export function fromCloud(data) {
       matches: arr(r.matches).map((m) => ({ court: m.court, a: arr(m.a), b: arr(m.b), sa: m.sa || 0, sb: m.sb || 0, done: !!m.done, ...(m.doneAt != null ? { doneAt: m.doneAt } : {}) })),
       rest: arr(r.rest),
       absent: arr(r.absent),
+      cycle: r.cycle || 0,
     })),
   };
 }
