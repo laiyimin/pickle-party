@@ -637,7 +637,8 @@ function scoreControls(ev, r, mi, m, courtNo) {
         : m.done
           ? `<button class="btn sm block" style="margin-top:10px" data-action="reopen" data-r="${r}" data-m="${mi}">改比分</button>`
           : `<button class="btn primary block" style="margin-top:10px" data-action="finish" data-r="${r}" data-m="${mi}">這場打完了 ✓</button>${
-              courtNo && !m.sa && !m.sb
+              // 只在一面球場時提供（多面球場時，後面的場次幾乎都有人還在其他球場上）
+              courtNo && !m.sa && !m.sb && Math.max(...ev.rounds.map((x) => x.matches.length)) === 1
                 ? `<button class="btn sm block swap-btn" data-action="swap-next" data-r="${r}" data-m="${mi}">⇅ 與下一場對調<span class="small muted">（這場 4 人延後一場打）</span></button>`
                 : ""
             }`
