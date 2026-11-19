@@ -243,7 +243,8 @@ input:focus { outline: none; box-shadow: 2px 2px 0 var(--shadow-ink); }
 .empty { text-align: center; padding: 28px 16px; }
 .empty .big { font-size: 44px; line-height: 1; }
 .empty .doodle-rally { transform: scale(1.3); margin: 8px 0 14px; }
-.theme-btn { margin-top: 8px; font-size: 17px; box-shadow: none; border-style: dashed; }
+.theme-btn { margin-top: 8px; font-size: 17px; box-shadow: none; border-style: dashed; flex-direction: column; gap: 0; padding-top: 6px; padding-bottom: 6px; white-space: normal; line-height: 1.35; }
+.theme-sub { font-size: 16px; font-weight: 400; color: var(--muted); }
 
 /* 貼接龍頁右上角的擊球塗鴉 */
 .paste-card h2 { padding-right: 84px; }

@@ -533,10 +533,10 @@ function renderHome() {
         : `<div class="card empty">
             ${RALLY}
             <p><strong>還沒有球局</strong></p>
-            <p class="ev-sub">在 LINE 長按接龍訊息 → 複製，<br>回到這裡按上面的按鈕貼上就好。</p>
+            <p class="ev-sub">在 LINE 長按接龍訊息 → 複製，<br>然後按下上面的按鈕，在裡面貼上。</p>
           </div>`
     }
-    <button class="btn block theme-btn" data-action="theme">🌓 畫面顏色：${THEME_NAMES[lsGet(THEME_KEY) || ""]}</button>`;
+    <button class="btn block theme-btn" data-action="theme"><span>🌓 畫面顏色：${THEME_NAMES[lsGet(THEME_KEY) || ""]}</span><span class="theme-sub">（按下可改變配色）</span></button>`;
 }
 
 const canReadClipboard = () => !!navigator.clipboard?.readText;
