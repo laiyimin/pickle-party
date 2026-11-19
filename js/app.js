@@ -1113,6 +1113,7 @@ function eventMenu() {
     <button class="menu-item" data-action="edit-players"><span class="ico">👥</span>有人加入／離開 → 重排剩下的賽程</button>
     <button class="menu-item" data-action="reshuffle"><span class="ico">🔀</span>重新洗牌（還沒打的場次）</button>
     ${theme}
+    ${ev.cloud?.key && cloudEnabled() ? `<button class="menu-item danger" data-action="delete-cloud"><span class="ico">☁️</span><span>刪除本賽局的雲端紀錄<br><span class="sub">分享出去的連結會打不開；這支手機上的紀錄會留著</span></span></button>` : ""}
     <button class="menu-item danger" data-action="delete-event"><span class="ico">🗑</span>${ev.cloud && !ev.cloud.owner ? "從這支手機移除" : "刪除這個球局"}</button>
     <button class="menu-item" data-action="close-sheet"><span class="ico">✕</span>關閉</button>`);
 }
@@ -1727,6 +1728,32 @@ async function onAction(el) {
       pushAll(ev);
       toast("已重新洗牌");
       renderEvent();
+      break;
+    }
+    case "delete-cloud": {
+      closeSheet();
+      if (!ev.cloud?.key) break;
+      if (
+        !(await ask(`刪除「${esc(ev.title)}」的雲端紀錄？<br>分享出去的記分、觀看連結都會打不開，其他手機也不會再同步。<br>這支手機上的賽程和比分會留著。刪除後無法復原。`, {
+          ok: "刪除雲端紀錄",
+          danger: true,
+        }))
+      )
+        return;
+      const cloud = ev.cloud;
+      stopWatch(); // 先停止同步，自己刪除時不會跳出「雲端已經被刪除」
+      try {
+        await busy("刪除雲端紀錄中…", () => deleteCloud(cloud));
+      } catch (e) {
+        console.warn(e);
+        ensureWatch(ev);
+        return toast(navigator.onLine ? "刪除失敗，請稍後再試" : "目前離線，連上網路後再刪除");
+      }
+      delete ev.cloud;
+      delete ev.unsynced;
+      saveEvents();
+      renderEvent();
+      toast("已刪除雲端紀錄，這支手機上的紀錄還在");
       break;
     }
     case "delete-event": {

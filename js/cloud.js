@@ -181,10 +181,10 @@ export function saveAll(cloud, ev) {
   });
 }
 
-// 建立的人刪除球局：雲端的也刪掉，用連結打開的人也看不到了
-export async function deleteCloud(cloud) {
-  const c = await signIn();
-  await c.db.remove(c.db.ref(c.database, `events/${cloud.id}`));
+// 刪除雲端上的球局（建立的人刪除球局時、或選單「刪除本賽局的雲端紀錄」）：用連結打開的人也看不到了。
+// 有記分權限的人都可以刪（換過手機、清過資料時會用編輯密鑰重新取得權限）
+export function deleteCloud(cloud) {
+  return withEditor(cloud, (c) => c.db.remove(c.db.ref(c.database, `events/${cloud.id}`)));
 }
 
 export async function watchCloud(id, onData) {
