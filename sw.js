@@ -1,7 +1,7 @@
 // 離線快取：先回快取、背景更新（stale-while-revalidate）
 // 同一個網域（laiyimin.github.io）下可能還有舊版 app，快取名稱加上自己的前綴，只清自己的舊快取
 const PREFIX = "pickle-party-";
-const CACHE = `${PREFIX}v20`;
+const CACHE = `${PREFIX}v21`;
 const SHELL = [
   "./",
   "index.html",

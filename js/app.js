@@ -1,7 +1,7 @@
 import { parseRoster, defaultTitle } from "./parser.js";
 import { buildCycle, standings } from "./scheduler.js";
 import { BALL, RALLY, ARROW, SHARE } from "./doodles.js";
-import { courtFlow, waitingFor, benched, isFinished } from "./flow.js";
+import { courtFlow, waitingFor, isFinished } from "./flow.js";
 import {
   keepForReschedule, pendingCount, swapSlots, findSwap, findPull, planExtra, withIds, copyScores,
   maxPlayStreak, lastOnCourt, playersOf, hasProgress, locateMatch,
@@ -362,6 +362,24 @@ const nameCls = (s) => {
 const teamNames = (ids, names) =>
   ids.map((id) => `<span class="pn${nameCls(names[id] || "?")}" data-pid="${esc(id)}">${esc(names[id] || "?")}</span>`).join("<br>");
 const teamText = (ids, names) => ids.map((id) => names[id] || "?").join("/");
+
+// 「現在」的名字用不影響版面的最大字級（CSS 依手機寬度決定）；
+// 名字太長放不下時，只把那個名字縮小到剛好放得下，不會被切斷或換行
+function fitNames() {
+  const els = document.querySelectorAll(".team .names .pn, .next-card .t .pn");
+  els.forEach((el) => (el.style.fontSize = ""));
+  els.forEach((el) => {
+    const box = el.parentElement.clientWidth;
+    const w = el.getBoundingClientRect().width;
+    if (box > 0 && w > box) el.style.fontSize = `${Math.max(16, Math.floor((parseFloat(getComputedStyle(el).fontSize) * box) / w))}px`;
+  });
+}
+let fitTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(fitTimer);
+  fitTimer = setTimeout(fitNames, 150);
+});
+document.fonts?.ready.then(fitNames); // 圓體字型載入後寬度會變
 const teamWords = (ids, names) => ids.map((id) => names[id] || "?").join("、");
 
 function progress(ev) {
@@ -687,6 +705,7 @@ function renderEvent() {
     ${tab === "live" ? liveHtml(ev) : tab === "rounds" ? roundsHtml(ev) : rankHtml(ev)}`;
   state.justDone = null;
   updateSyncBadge();
+  fitNames();
   // 整場打完時跳出「打完了」
   if (tab === "live") {
     const all = courtFlow(ev).allDone;
@@ -742,7 +761,7 @@ async function advanceWithFlight(stampCard, opts = {}) {
     }
     // 3. 有換人的球場：舊的名字、比分、按鈕往上淡出
     const sel = (k) => `.courts > .card[data-court="${k}"]`;
-    const parts = (k) => `${sel(k)} .score-num, ${sel(k)} .score-btn, ${sel(k)} .btn, ${sel(k)} .wait-box, ${sel(k)} .last-line`;
+    const parts = (k) => `${sel(k)} .score-num, ${sel(k)} .btn, ${sel(k)} .wait-box, ${sel(k)} .last-line`;
     const olds = changed.flatMap((k) => [...document.querySelectorAll(`${sel(k)} .pn, ${sel(k)} .scorebox, ${sel(k)} .done-badge, ${parts(k)}`)]);
     await Promise.all(
       olds.map((el, i) => play(el, [{ opacity: 1, transform: "none" }, { opacity: 0, transform: "translateY(-18px)" }], { duration: 220, delay: i * 12, easing: "ease-in" }))
@@ -846,9 +865,7 @@ function scoreControls(ev, r, mi, m, courtNo) {
       <div class="names">${teamNames(ids, names)}</div>
       ${
         editable
-          ? `<button type="button" class="score-num" data-action="pick-score" data-r="${r}" data-m="${mi}" data-s="${s}" aria-label="${esc(who)} ${val} 分，點一下直接選分數">${val}</button>
-             <button type="button" class="score-btn plus" data-action="score" data-r="${r}" data-m="${mi}" data-s="${s}" data-d="1" aria-label="${esc(who)} 加一分">＋1</button>
-             <button type="button" class="score-btn minus" data-action="score" data-r="${r}" data-m="${mi}" data-s="${s}" data-d="-1" aria-label="${esc(who)} 減一分" ${val ? "" : "disabled"}>−1</button>`
+          ? `<button type="button" class="score-num" data-action="pick-score" data-r="${r}" data-m="${mi}" data-s="${s}" aria-label="${esc(who)} ${val} 分，點一下選分數"><span class="score-val">${val}</span><span class="score-hint">✎ 點這裡記分</span></button>`
           : `<div class="scorebox"><span class="num">${val}</span></div>`
       }
     </div>`;
@@ -901,7 +918,6 @@ function liveHtml(ev) {
       }
     </div>`;
   }
-  const activeIds = ev.players.filter((p) => !p.left).map((p) => p.id);
   const wait = waitingFor(ev, flow);
   const nums = matchNumbers(ev);
   const cp = cycleProgress(ev, flow);
@@ -938,9 +954,6 @@ function liveHtml(ev) {
   };
   // 「下一場」：接下來要上場的比賽（照順序，最多和球場數一樣多）
   const upcoming = flow.pending.slice(0, flow.nCourts);
-  const upcomingIds = new Set(upcoming.flatMap((u) => playersOf(ev.rounds[u.ri].matches[u.mi])));
-  const nextRest = activeIds.filter((id) => !upcomingIds.has(id));
-  const bench = benched(ev, flow, activeIds);
   // 給群組看比分的連結（只能看、不能改）；放在最下面，不佔上面的位置
   const linkBtn = cloudEnabled() && !state.shared
     ? `<button class="btn block copy-link" data-action="${ev.cloud ? "copy-view-link" : "share-view"}">${SHARE}${ev.cloud ? "複製觀看連結（貼到 LINE 群組）" : "建立觀看連結（貼到 LINE 群組）"}</button>`
@@ -968,14 +981,14 @@ function liveHtml(ev) {
             ${upcoming
               .map((u) => {
                 const m = ev.rounds[u.ri].matches[u.mi];
-                return `<div class="mini-match" data-key="${u.key}"><span class="ct">第 ${nums.map.get(u.key).n} 場</span><span class="t r">${teamNames(m.a, names)}</span><span class="s">vs</span><span class="t">${teamNames(m.b, names)}</span></div>`;
+                // 場次編號放在上面一行，名字左右兩欄可以比較寬、字放比較大
+                return `<div class="next-item"><div class="next-num">第 ${nums.map.get(u.key).n} 場</div>
+                  <div class="mini-match" data-key="${u.key}"><span class="t r">${teamNames(m.a, names)}</span><span class="s">vs</span><span class="t">${teamNames(m.b, names)}</span></div></div>`;
               })
               .join("")}
-            ${nextRest.length ? `<div class="rest-line">接著休息：${nameList(nextRest, names)}</div>` : ""}
           </div>`
         : ""
     }
-    ${bench.length ? `<div class="rest-line">🪑 現在場邊休息：${nameList(bench, names)}</div>` : ""}
     ${linkBtn}`;
 }
 
@@ -1023,7 +1036,6 @@ function roundsHtml(ev) {
               </button>`;
             })
             .join("")}
-          ${round.rest.length ? `<div class="rest-line">休息：${nameList(round.rest, names)}</div>` : ""}
         </div>`;
       })
       .join("")}
@@ -1143,6 +1155,7 @@ function scorePicker(ev, r, mi, s) {
   let grid = "";
   for (let i = 0; i <= Math.max(30, val); i++) grid += `<button class="num-btn${i === val ? " on" : ""}" data-action="set-score" data-v="${i}">${i}</button>`;
   openSheet(`<h3>${esc(teamWords(s === "a" ? m.a : m.b, nameMap(ev)))} 的分數</h3>
+    <p class="sheet-note">點一下現在的分數就記好了</p>
     <div class="num-grid">${grid}</div>
     <button class="btn block" data-action="close-sheet" style="margin-top:12px">取消</button>`);
 }
@@ -1461,25 +1474,6 @@ async function onAction(el) {
     case "jump":
       document.getElementById(`court-${el.dataset.k}`)?.scrollIntoView({ behavior: reduceMotion() ? "auto" : "smooth", block: "start" });
       break;
-    case "score": {
-      const m = ev.rounds[r]?.matches[mi];
-      if (!m || !canScore(m, `${r}-${mi}`)) break;
-      const k = el.dataset.s === "a" ? "sa" : "sb";
-      const v = Math.max(0, Math.min(99, (m[k] || 0) + Number(el.dataset.d)));
-      if (v === m[k]) break;
-      m[k] = v;
-      saveEvents();
-      pushMatch(ev, r, mi);
-      if (navigator.vibrate) navigator.vibrate(8);
-      const y = window.scrollY;
-      renderEvent();
-      window.scrollTo(0, y);
-      document.querySelector(`[data-action="pick-score"][data-r="${r}"][data-m="${mi}"][data-s="${el.dataset.s}"]`)?.animate(
-        [{ transform: "scale(1.25)" }, { transform: "scale(1)" }],
-        { duration: 220, easing: "ease-out" }
-      );
-      break;
-    }
     case "pick-score":
       scorePicker(ev, r, mi, el.dataset.s);
       break;
@@ -1492,9 +1486,15 @@ async function onAction(el) {
       m[pk.s === "a" ? "sa" : "sb"] = Number(el.dataset.v);
       saveEvents();
       pushMatch(ev, at[0], at[1]);
+      if (navigator.vibrate) navigator.vibrate(8);
       const y = window.scrollY;
       renderEvent();
       window.scrollTo(0, y);
+      // 剛改的分數跳一下，讓人看到有記上去
+      document.querySelector(`[data-action="pick-score"][data-r="${at[0]}"][data-m="${at[1]}"][data-s="${pk.s}"] .score-val`)?.animate(
+        [{ transform: "scale(1.35)" }, { transform: "scale(1)" }],
+        { duration: 300, easing: "ease-out" }
+      );
       break;
     }
     case "absent":
