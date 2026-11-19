@@ -1,5 +1,7 @@
 // 離線快取：先回快取、背景更新（stale-while-revalidate）
-const CACHE = "rallymate-v20";
+// 同一個網域（laiyimin.github.io）下可能還有舊版 app，快取名稱加上自己的前綴，只清自己的舊快取
+const PREFIX = "pickle-party-";
+const CACHE = `${PREFIX}v20`;
 const SHELL = [
   "./",
   "index.html",
@@ -25,7 +27,7 @@ self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith(PREFIX) && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
