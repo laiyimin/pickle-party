@@ -362,8 +362,8 @@ td.name .xlong { font-size: 17px; }
 .pick-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .pick-grid .btn { font-size: 22px; min-height: 60px; white-space: normal; }
 /* 直接選分數 */
-.num-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
-.num-btn { min-height: 54px; border: 2px solid var(--ink); border-radius: var(--wob2); background: var(--card); font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); }
+.num-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.num-btn { min-height: 76px; border: 2.5px solid var(--ink); border-radius: var(--wob2); background: var(--card); font-size: 40px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--ink); box-shadow: 2px 2px 0 var(--ink); }
 .num-btn.on { background: var(--ball); color: #3b2f28; }
 .num-btn:active { background: var(--ball-soft); }
 

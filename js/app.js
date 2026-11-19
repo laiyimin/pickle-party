@@ -1154,7 +1154,8 @@ function scorePicker(ev, r, mi, s) {
   const val = s === "a" ? m.sa : m.sb;
   state.picking = { r, mi, s, ref: { ...m }, cy: ev.rounds[r].cycle || 0 };
   let grid = "";
-  for (let i = 0; i <= Math.max(30, val); i++) grid += `<button class="num-btn${i === val ? " on" : ""}" data-action="set-score" data-v="${i}">${i}</button>`;
+  // 0–15 分（4×4 大按鈕）；舊資料如果已經超過 15 分，多排到那個分數
+  for (let i = 0; i <= Math.max(15, val); i++) grid += `<button class="num-btn${i === val ? " on" : ""}" data-action="set-score" data-v="${i}">${i}</button>`;
   openSheet(`<h3>${esc(teamWords(s === "a" ? m.a : m.b, nameMap(ev)))} 的分數</h3>
     <p class="sheet-note">點一下現在的分數就記好了</p>
     <div class="num-grid">${grid}</div>
